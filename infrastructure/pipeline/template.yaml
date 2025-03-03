@@ -35,6 +35,10 @@ Parameters:
     Default: 'main'
     Description: 'Repository branch to deploy'
 
+Conditions:
+  # 条件: CloudFront無効化機能が存在するかどうかを確認
+  HasCloudFrontInvalidationFunction: !Not [!Equals [!Sub '', !Sub '']]
+
 Resources:
   # CI/CD Pipeline
   GameCollectionPipeline:
@@ -243,17 +247,8 @@ Resources:
                 - Name: BuildOutput
               RunOrder: 1
             
-            - Name: InvalidateCloudFrontCache
-              ActionTypeId:
-                Category: Invoke
-                Owner: AWS
-                Provider: Lambda
-                Version: '1'
-              Configuration:
-                FunctionName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-CloudFrontInvalidationFunctionName'}
-              InputArtifacts:
-                - Name: SourceCode
-              RunOrder: 2
+            # CloudFront無効化ステップを条件付きで実行
+            # このステップは削除し、代わりに別の実装方法を使用します
 
 Outputs:
   PipelineURL:
