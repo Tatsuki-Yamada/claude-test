@@ -49,11 +49,31 @@ npm start  # または yarn start
 
 ## AWSリソースのデプロイ
 
-このプロジェクトでは、すべてのインフラストラクチャリソースがCodePipelineによって管理されます。最初に初期パイプラインをデプロイし、その後パイプラインがすべてのリソースを自動的にデプロイします。
+デプロイは2段階で行います：
 
-### 1. パイプラインスタックのデプロイ
+1. 最初に基本インフラ（IAMロール、S3バケットなど）をデプロイ
+2. 次にCodePipelineをデプロイし、残りのリソースをパイプラインで管理
 
-まず、パイプライン本体とそのリソース（IAMロール、アーティファクトバケット）をデプロイします：
+### 1. 基本インフラスタックのデプロイ
+
+```bash
+aws cloudformation create-stack \
+  --stack-name game-collection-dev-base \
+  --template-body file://infrastructure/base/template.yaml \
+  --parameters \
+    ParameterKey=AppName,ParameterValue=game-collection \
+    ParameterKey=Environment,ParameterValue=dev \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+このスタックがデプロイされると、以下のリソースが作成されます：
+
+- IAMロール（CodePipeline、CodeBuild、CloudFormation、Lambda用）
+- S3バケット（パイプラインアーティファクトとWebサイトホスティング用）
+
+### 2. CodePipelineスタックのデプロイ
+
+基本インフラスタックのデプロイが完了したら、CodePipelineをデプロイします：
 
 ```bash
 aws cloudformation create-stack \
@@ -73,34 +93,56 @@ GitHubトークンは、以下のスコープを持つものを使用してく�
 - `repo`
 - `admin:repo_hook`
 
-### 2. パイプライン実行フロー
+### 3. パイプラインの実行フロー
 
-パイプラインスタックがデプロイされると、CodePipelineが自動的に起動し、以下の順序でリソースをデプロイします：
+CodePipelineがデプロイされると、自動的に実行が開始され、以下の順序でリソースがデプロイされます：
 
-1. **ソースコード取得**: GitHubリポジトリからコードを取得
-2. **IAMリソースのデプロイ**: 各コンポーネント用のIAMロールをデプロイ
-3. **S3リソースのデプロイ**: 必要なS3バケットをデプロイ
-4. **CodeBuildリソースのデプロイ**: フロントエンドビルド用のCodeBuildプロジェクトをデプロイ
-5. **Lambdaリソースのデプロイ**: CloudFrontキャッシュ無効化用のLambda関数をデプロイ
-6. **アプリケーションスタックのデプロイ**: Cognito、DynamoDB、API Gateway、CloudFrontなどのアプリケーションスタックをデプロイ
-7. **フロントエンドビルド**: ReactアプリケーションをCodeBuildでビルド
-8. **フロントエンドデプロイ**: ビルド成果物をS3にデプロイし、CloudFrontキャッシュを無効化
+1. **Source**: GitHubリポジトリからソースコードを取得
+2. **DeployCodeBuildProject**: フロントエンドビルド用のCodeBuildプロジェクトをデプロイ
+3. **DeployLambdaFunction**: CloudFrontキャッシュ無効化用のLambda関数をデプロイ
+4. **DeployAuthStack**: 認証スタックをデプロイ（Cognito）
+5. **DeployStorageStack**: ストレージスタックをデプロイ（DynamoDB）
+6. **DeployAPIStack**: APIスタックをデプロイ（API Gateway、Lambda）
+7. **DeployFrontendInfraStack**: フロントエンドインフラスタックをデプロイ（CloudFront）
+8. **BuildFrontend**: CodeBuildを使用してフロントエンドをビルド
+9. **DeployFrontend**: ビルド成果物をS3にデプロイし、CloudFrontキャッシュを無効化
 
-このフローにより、すべてのインフラストラクチャがコード管理され、自動的にデプロイされます。
+この構造により、インフラの変更とアプリケーションコードの変更が一元管理され、自動的にデプロイされます。
 
-### 3. パイプラインの進行状況確認
+## プロジェクト構造
 
-パイプラインの進行状況は、AWS Management ConsoleのCodePipelineページで確認できます：
+### インフラストラクチャコード
 
-```
-https://console.aws.amazon.com/codepipeline/home?region=<YOUR_REGION>#/view/game-collection-dev-pipeline
-```
+- **基本インフラ**: `/infrastructure/base/template.yaml`
+  - IAMロール、S3バケットなど、パイプラインが依存する基本リソース
+
+- **パイプライン**: `/infrastructure/pipeline/template.yaml`
+  - CodePipelineの定義
+
+- **CodeBuild**: `/infrastructure/codebuild/frontend-build.yaml`
+  - フロントエンドビルド用のCodeBuildプロジェクト
+
+- **Lambda**: `/infrastructure/lambda/cf-invalidation.yaml`
+  - CloudFrontキャッシュ無効化用のLambda関数
+
+- **アプリケーションスタック**:
+  - `/infrastructure/auth/template.yaml`: 認証（Cognito）
+  - `/infrastructure/storage/template.yaml`: ストレージ（DynamoDB）
+  - `/infrastructure/api/template.yaml`: API（API Gateway、Lambda）
+  - `/infrastructure/frontend/template.yaml`: フロントエンド配信（CloudFront）
+
+### フロントエンドコード
+
+- `/frontend`: Reactアプリケーション
 
 ## リソース情報の取得
 
 各スタックがデプロイされたら、以下のコマンドでリソース情報を取得できます：
 
 ```bash
+# 基本インフラスタック
+aws cloudformation describe-stacks --stack-name game-collection-dev-base --query "Stacks[0].Outputs"
+
 # 認証スタック
 aws cloudformation describe-stacks --stack-name game-collection-dev-auth --query "Stacks[0].Outputs"
 
@@ -126,37 +168,7 @@ git commit -m "変更を追加"
 git push
 ```
 
-インフラストラクチャの変更も同様にコードとしてコミットし、GitHubにプッシュすることで自動的にデプロイされます。
-
-## スタックの構造
-
-このプロジェクトでは以下のスタックが使用されています：
-
-1. **パイプラインスタック** (`game-collection-pipeline`)
-   - CodePipeline本体
-   - 初期IAMロール
-   - アーティファクトバケット
-
-2. **IAMスタック** (`game-collection-dev-iam`)
-   - CodeBuildサービスロール
-   - Lambda実行ロール
-   - CloudFormationサービスロール
-
-3. **S3スタック** (`game-collection-dev-s3`)
-   - Webサイトバケット
-   - サムネイルバケット
-
-4. **CodeBuildスタック** (`game-collection-dev-codebuild`)
-   - フロントエンドビルドプロジェクト
-
-5. **Lambdaスタック** (`game-collection-dev-lambda`)
-   - CloudFrontキャッシュ無効化関数
-
-6. **アプリケーションスタック**
-   - 認証スタック (`game-collection-dev-auth`)
-   - ストレージスタック (`game-collection-dev-storage`)
-   - APIスタック (`game-collection-dev-api`)
-   - フロントエンドインフラスタック (`game-collection-dev-frontend-infra`)
+インフラストラクチャの変更も同様に、該当するCloudFormationテンプレートを変更し、GitHubにプッシュすることで自動的にデプロイされます。
 
 ## スタックの削除
 
@@ -172,20 +184,32 @@ aws cloudformation delete-stack --stack-name game-collection-dev-api
 aws cloudformation delete-stack --stack-name game-collection-dev-storage
 aws cloudformation delete-stack --stack-name game-collection-dev-auth
 
-# 最後にインフラスタックを削除
-aws cloudformation delete-stack --stack-name game-collection-dev-lambda
-aws cloudformation delete-stack --stack-name game-collection-dev-codebuild
-aws cloudformation delete-stack --stack-name game-collection-dev-s3
-aws cloudformation delete-stack --stack-name game-collection-dev-iam
+# CodeBuildプロジェクトとLambda関数のスタックを削除
+aws cloudformation delete-stack --stack-name game-collection-dev-frontend-build
+aws cloudformation delete-stack --stack-name game-collection-dev-cf-invalidation
+
+# 最後に基本インフラスタックを削除
+aws cloudformation delete-stack --stack-name game-collection-dev-base
 ```
 
 ## トラブルシューティング
 
-### パイプラインのエラー
-パイプラインのデプロイやアクションで問題が発生した場合は、AWS Management ConsoleでCodePipelineのコンソールからエラーの詳細を確認し、対応するスタックまたはリソースを修正してください。
+### ステップ間の依存関係エラー
 
-### 依存関係のエラー
-スタック間に依存関係があるため、デプロイの順序が重要です。一部のスタックがデプロイされていない場合、依存するスタックもデプロイに失敗します。パイプラインの実行履歴を確認して、どのステージで失敗したかを特定してください。
+CodePipelineのステージやアクションがエクスポートされた値を見つけられない場合、正しい順序でスタックがデプロイされているか確認してください。基本インフラスタックが最初にデプロイされ、必要な出力値をエクスポートしていることを確認します。
 
 ### IAMロールの権限エラー
-スタックデプロイ中にIAMロールの権限エラーが発生した場合は、`CAPABILITY_NAMED_IAM`パラメータが指定されていることを確認してください。また、必要なIAM権限がCloudFormationサービスロールに付与されていることを確認してください。
+
+スタックデプロイ中にIAMロールの権限エラーが発生した場合は、`CAPABILITY_NAMED_IAM`パラメータが指定されていることを確認してください。また、必要なIAM権限が正しく設定されているか確認してください。
+
+### パイプラインのエラー
+
+パイプラインのステージが失敗した場合は、AWS Management ConsoleのCodePipelineページでエラー詳細を確認してください。多くの場合、CloudFormationスタックのロールバックエラーやCodeBuildプロジェクトのビルドエラーが原因です。
+
+### 環境変数の設定
+
+パイプラインが正常に実行された後、フロントエンドアプリケーションが正しく動作するには、`.env.local`ファイルに正しい環境変数を設定する必要があります。各スタックの出力値を確認して、APIエンドポイントやCognitoの設定を正しく設定してください。
+
+## まとめ
+
+この構成により、基本的なインフラリソースを手動で一度デプロイし、その後はCodePipelineを通じてすべてのリソースを管理する仕組みになっています。GitHubへのプッシュで自動的にデプロイされるため、継続的な開発と更新が容易になります。
