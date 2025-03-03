@@ -179,6 +179,21 @@ Resources:
                   - 'codebuild:BatchGetBuilds'
                 Resource: '*'
 
+  # S3 Bucket for Static Web Hosting
+  WebsiteBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${AppName}-${Environment}-website'
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
   # CI/CD Pipeline
   GameCollectionPipeline:
     Type: 'AWS::CodePipeline::Pipeline'
@@ -278,7 +293,7 @@ Resources:
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 1
-        
+              
         # Deploy Frontend Infrastructure Stack
         - Name: DeployFrontendInfraStack
           Actions:
@@ -329,8 +344,7 @@ Resources:
                 Provider: S3
                 Version: '1'
               Configuration:
-                BucketName: 
-                  Fn::ImportValue: !Sub '${AppName}-${Environment}-WebsiteBucketName'
+                BucketName: !Ref WebsiteBucket
                 Extract: true
               InputArtifacts:
                 - Name: BuildOutput
@@ -439,3 +453,9 @@ Outputs:
   ArtifactsBucket:
     Description: 'S3 bucket for pipeline artifacts'
     Value: !Ref ArtifactsBucket
+    
+  WebsiteBucketName:
+    Description: 'Name of the S3 bucket for website hosting'
+    Value: !Ref WebsiteBucket
+    Export:
+      Name: !Sub '${AppName}-${Environment}-WebsiteBucketName'
