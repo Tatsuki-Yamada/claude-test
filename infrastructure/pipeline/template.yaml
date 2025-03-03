@@ -87,6 +87,11 @@ Resources:
                     'iam:PassedToService':
                       - cloudformation.amazonaws.com
                       - codebuild.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - 'codebuild:StartBuild'
+                  - 'codebuild:BatchGetBuilds'
+                Resource: '*'
 
   # CloudFormation Service Role
   CloudFormationServiceRole:
@@ -102,6 +107,32 @@ Resources:
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AdministratorAccess'
+
+  # CodeBuild Service Role
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${AppName}-${Environment}-codebuild-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'codebuild:StartBuild'
+                  - 'codebuild:BatchGetBuilds'
+                Resource: '*'
 
   # CodePipeline Artifacts Bucket
   ArtifactsBucket:
@@ -121,6 +152,55 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+
+  # S3 Bucket for Website Hosting
+  WebsiteBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${AppName}-${Environment}-website'
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  # CodeBuild Project for Frontend Build
+  FrontendBuildProject:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Sub '${AppName}-${Environment}-frontend-build'
+      Description: 'Build frontend for Game Collection App'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: false
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 16
+              commands:
+                - cd frontend
+                - npm install
+            build:
+              commands:
+                - npm run build
+          artifacts:
+            base-directory: frontend/build
+            files:
+              - '**/*'
+      TimeoutInMinutes: 15
 
   # CI/CD Pipeline
   GameCollectionPipeline:
@@ -355,7 +435,7 @@ Resources:
                 Provider: CodeBuild
                 Version: '1'
               Configuration:
-                ProjectName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-FrontendBuildProjectName'}
+                ProjectName: !Ref FrontendBuildProject
               InputArtifacts:
                 - Name: SourceCode
               OutputArtifacts:
@@ -371,7 +451,7 @@ Resources:
                 Provider: S3
                 Version: '1'
               Configuration:
-                BucketName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-WebsiteBucketName'}
+                BucketName: !Ref WebsiteBucket
                 Extract: true
               InputArtifacts:
                 - Name: BuildOutput
@@ -398,3 +478,15 @@ Outputs:
     Value: !Ref ArtifactsBucket
     Export:
       Name: !Sub '${AppName}-${Environment}-ArtifactsBucketName'
+  
+  WebsiteBucketName:
+    Description: 'Name of the S3 bucket for website hosting'
+    Value: !Ref WebsiteBucket
+    Export:
+      Name: !Sub '${AppName}-${Environment}-WebsiteBucketName'
+  
+  FrontendBuildProjectName:
+    Description: 'Name of the frontend build CodeBuild project'
+    Value: !Ref FrontendBuildProject
+    Export:
+      Name: !Sub '${AppName}-${Environment}-FrontendBuildProjectName'
