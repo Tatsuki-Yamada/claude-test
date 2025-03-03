@@ -8,6 +8,7 @@
 - npm または yarn
 - AWS CLI（設定済み）
 - AWS アカウント
+- GitHub アカウント
 
 ## 開発環境のセットアップ
 
@@ -48,9 +49,62 @@ npm start  # または yarn start
 
 ## AWSリソースのデプロイ
 
-### 1. CloudFormationテンプレートのデプロイ
+### 方法1: CI/CDパイプラインを使用した自動デプロイ（推奨）
 
-以下の順序でCloudFormationスタックをデプロイします：
+CI/CDパイプラインを設定することで、GitHubリポジトリへのプッシュ時に自動的にすべてのスタックをデプロイできます。
+
+#### 1. パイプラインスタックのデプロイ
+
+```bash
+cd infrastructure/pipeline
+
+# パイプラインのデプロイ
+aws cloudformation create-stack \
+  --stack-name game-collection-pipeline \
+  --template-body file://template.yaml \
+  --parameters \
+    ParameterKey=AppName,ParameterValue=game-collection \
+    ParameterKey=Environment,ParameterValue=dev \
+    ParameterKey=RepositoryName,ParameterValue=claude-test \
+    ParameterKey=RepositoryOwner,ParameterValue=Tatsuki-Yamada \
+    ParameterKey=GitHubOAuthToken,ParameterValue=<YOUR_GITHUB_TOKEN> \
+    ParameterKey=Branch,ParameterValue=main \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+GitHubトークンは、以下のスコープを持つものを使用してください：
+- `repo`
+- `admin:repo_hook`
+
+#### 2. パイプラインの実行
+
+パイプラインがデプロイされると、自動的に実行が開始されます。実行状況はAWS Management Consoleで確認できます。
+
+```
+https://console.aws.amazon.com/codepipeline/home?region=<YOUR_REGION>#/view/game-collection-dev-pipeline
+```
+
+パイプラインは以下の順序でスタックをデプロイします：
+1. 認証スタック（Cognito）
+2. ストレージスタック（S3、DynamoDB）
+3. APIスタック（API Gateway、Lambda）
+4. フロントエンドインフラスタック（CloudFront）
+5. フロントエンドビルド
+6. S3へのデプロイとCloudFrontキャッシュの無効化
+
+#### 3. 変更の反映
+
+リポジトリに変更をプッシュすると、パイプラインが自動的に実行され、変更が反映されます。
+
+```bash
+git add .
+git commit -m "変更を追加"
+git push
+```
+
+### 方法2: CloudFormationテンプレートの手動デプロイ
+
+必要に応じて、CloudFormationスタックを個別に手動でデプロイすることもできます。
 
 #### 認証スタック（Cognito）
 
@@ -96,7 +150,7 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM
 ```
 
-### 2. リソース情報の取得
+### リソース情報の取得
 
 各スタックがデプロイされたら、以下のコマンドでリソース情報を取得できます：
 
@@ -116,7 +170,9 @@ aws cloudformation describe-stacks --stack-name game-collection-dev-frontend --q
 
 取得した情報を元に、`.env.local` ファイルの環境変数を設定します。
 
-## フロントエンドのデプロイ
+## 手動でのフロントエンドデプロイ
+
+パイプラインを使用せずに手動でフロントエンドをデプロイする場合は、以下の手順を実行します。
 
 ### 1. フロントエンドのビルド
 
@@ -153,6 +209,12 @@ echo "WebサイトURL: https://$DOMAIN_NAME"
 ```
 
 ## トラブルシューティング
+
+### パイプラインのエラー
+
+- CodePipelineコンソールでエラーの詳細を確認
+- GitHubトークンのスコープと有効期限を確認
+- IAMロールのアクセス権限を確認
 
 ### APIへの接続エラー
 
