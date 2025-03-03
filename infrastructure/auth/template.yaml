@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Authentication resources for Game Collection App'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: 'game-collection'
+    Description: 'Application name used for naming resources'
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues:
+      - 'dev'
+      - 'prod'
+    Description: 'Environment (dev or prod)'
+
+Resources:
+  # Cognito User Pool
+  UserPool:
+    Type: 'AWS::Cognito::UserPool'
+    Properties:
+      UserPoolName: !Sub '${AppName}-${Environment}-user-pool'
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+      MfaConfiguration: 'OFF'
+  
+  # User Pool Client
+  UserPoolClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    Properties:
+      ClientName: !Sub '${AppName}-${Environment}-client'
+      UserPoolId: !Ref UserPool
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+  
+  # Identity Pool
+  IdentityPool:
+    Type: 'AWS::Cognito::IdentityPool'
+    Properties:
+      IdentityPoolName: !Sub '${AppName}-${Environment}-identity-pool'
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref UserPoolClient
+          ProviderName: !GetAtt UserPool.ProviderName
+  
+  # Authenticated Role
+  AuthenticatedRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action:
+              - 'sts:AssumeRoleWithWebIdentity'
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref IdentityPool
+              'ForAnyValue:StringLike':
+                'cognito-identity.amazonaws.com:amr': authenticated
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess'
+      Policies:
+        - PolicyName: 'GameCollectionUserPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:DeleteObject'
+                Resource: !Sub 'arn:aws:s3:::${AppName}-${Environment}-thumbnails/*'
+  
+  # Identity Pool Role Attachment
+  IdentityPoolRoleAttachment:
+    Type: 'AWS::Cognito::IdentityPoolRoleAttachment'
+    Properties:
+      IdentityPoolId: !Ref IdentityPool
+      Roles:
+        authenticated: !GetAtt AuthenticatedRole.Arn
+
+Outputs:
+  UserPoolId:
+    Description: 'ID of the User Pool'
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub '${AppName}-${Environment}-UserPoolId'
+  
+  UserPoolClientId:
+    Description: 'ID of the User Pool Client'
+    Value: !Ref UserPoolClient
+    Export:
+      Name: !Sub '${AppName}-${Environment}-UserPoolClientId'
+  
+  IdentityPoolId:
+    Description: 'ID of the Identity Pool'
+    Value: !Ref IdentityPool
+    Export:
+      Name: !Sub '${AppName}-${Environment}-IdentityPoolId'
+  
+  AuthenticatedRoleArn:
+    Description: 'ARN of the Authenticated Role'
+    Value: !GetAtt AuthenticatedRole.Arn
+    Export:
+      Name: !Sub '${AppName}-${Environment}-AuthenticatedRoleArn'
