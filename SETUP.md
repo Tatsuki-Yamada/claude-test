@@ -4,7 +4,7 @@
 
 ## 前提条件
 
-- Node.js (v14以上)
+- Node.js (v16以上)
 - npm または yarn
 - AWS CLI（設定済み）
 - AWS アカウント
@@ -49,19 +49,26 @@ npm start  # または yarn start
 
 ## AWSリソースのデプロイ
 
-### 方法1: CI/CDパイプラインを使用した自動デプロイ（推奨）
+CI/CDパイプラインはネストしたスタック構造を使用しており、まずパイプラインスタックをデプロイすることで、他のすべてのリソースが自動的にデプロイされます。
 
-CI/CDパイプラインを設定することで、GitHubリポジトリへのプッシュ時に自動的にすべてのスタックをデプロイできます。
+### 1. S3バケットを作成（ネストされたスタックテンプレート用）
 
-#### 1. パイプラインスタックのデプロイ
+CloudFormationはネストされたスタックのテンプレートをS3から読み込む必要があるため、まず一時的なS3バケットを作成します：
 
 ```bash
-cd infrastructure/pipeline
+# バケットを作成
+aws s3 mb s3://game-collection-cfn-templates
 
-# パイプラインのデプロイ
+# テンプレートファイルをアップロード
+aws s3 cp infrastructure/pipeline/templates/ s3://game-collection-cfn-templates/ --recursive
+```
+
+### 2. パイプラインスタックのデプロイ
+
+```bash
 aws cloudformation create-stack \
   --stack-name game-collection-pipeline \
-  --template-body file://template.yaml \
+  --template-body file://infrastructure/pipeline/template.yaml \
   --parameters \
     ParameterKey=AppName,ParameterValue=game-collection \
     ParameterKey=Environment,ParameterValue=dev \
@@ -76,81 +83,39 @@ GitHubトークンは、以下のスコープを持つものを使用してく�
 - `repo`
 - `admin:repo_hook`
 
-#### 2. パイプラインの実行
+### 3. スタック構造
 
-パイプラインがデプロイされると、自動的に実行が開始されます。実行状況はAWS Management Consoleで確認できます。
+パイプラインスタックが以下のネストされたスタックを作成します：
 
-```
-https://console.aws.amazon.com/codepipeline/home?region=<YOUR_REGION>#/view/game-collection-dev-pipeline
-```
+1. **IAMスタック**：必要なIAMロール
+   - CodePipelineサービスロール
+   - CloudFormationサービスロール
+   - CodeBuildサービスロール
+   - Lambda実行ロール
 
-パイプラインは以下の順序でスタックをデプロイします：
-1. 認証スタック（Cognito）
-2. ストレージスタック（S3、DynamoDB）
-3. APIスタック（API Gateway、Lambda）
-4. フロントエンドインフラスタック（CloudFront）
-5. フロントエンドビルド
-6. S3へのデプロイとCloudFrontキャッシュの無効化
+2. **S3スタック**：必要なS3バケット
+   - パイプラインアーティファクト用バケット
+   - Webサイトホスティング用バケット
 
-#### 3. 変更の反映
+3. **CodeBuildスタック**：ビルドプロジェクト
+   - フロントエンドビルドプロジェクト
 
-リポジトリに変更をプッシュすると、パイプラインが自動的に実行され、変更が反映されます。
+4. **Lambdaスタック**：必要なLambda関数
+   - CloudFrontキャッシュ無効化関数
 
-```bash
-git add .
-git commit -m "変更を追加"
-git push
-```
+### 4. パイプラインのデプロイフロー
 
-### 方法2: CloudFormationテンプレートの手動デプロイ
+親スタックがデプロイされると、CodePipelineが作成され、次の順序でリソースがデプロイされます：
 
-必要に応じて、CloudFormationスタックを個別に手動でデプロイすることもできます。
+1. GitHubからソースコードを取得
+2. 認証スタック（Cognito）のデプロイ
+3. ストレージスタック（S3、DynamoDB）のデプロイ
+4. APIスタック（API Gateway、Lambda）のデプロイ
+5. フロントエンドインフラスタック（CloudFront）のデプロイ
+6. フロントエンドのビルド
+7. S3へのデプロイとCloudFrontキャッシュの無効化
 
-#### 認証スタック（Cognito）
-
-```bash
-cd infrastructure/auth
-aws cloudformation create-stack \
-  --stack-name game-collection-dev-auth \
-  --template-body file://template.yaml \
-  --parameters ParameterKey=AppName,ParameterValue=game-collection ParameterKey=Environment,ParameterValue=dev \
-  --capabilities CAPABILITY_IAM
-```
-
-#### ストレージスタック（S3、DynamoDB）
-
-```bash
-cd ../storage
-aws cloudformation create-stack \
-  --stack-name game-collection-dev-storage \
-  --template-body file://template.yaml \
-  --parameters ParameterKey=AppName,ParameterValue=game-collection ParameterKey=Environment,ParameterValue=dev \
-  --capabilities CAPABILITY_IAM
-```
-
-#### APIスタック（API Gateway、Lambda）
-
-```bash
-cd ../api
-aws cloudformation create-stack \
-  --stack-name game-collection-dev-api \
-  --template-body file://template.yaml \
-  --parameters ParameterKey=AppName,ParameterValue=game-collection ParameterKey=Environment,ParameterValue=dev \
-  --capabilities CAPABILITY_IAM
-```
-
-#### フロントエンドスタック（CloudFront、S3）
-
-```bash
-cd ../frontend
-aws cloudformation create-stack \
-  --stack-name game-collection-dev-frontend \
-  --template-body file://template.yaml \
-  --parameters ParameterKey=AppName,ParameterValue=game-collection ParameterKey=Environment,ParameterValue=dev \
-  --capabilities CAPABILITY_IAM
-```
-
-### リソース情報の取得
+## リソース情報の取得
 
 各スタックがデプロイされたら、以下のコマンドでリソース情報を取得できます：
 
@@ -164,71 +129,51 @@ aws cloudformation describe-stacks --stack-name game-collection-dev-storage --qu
 # APIスタック
 aws cloudformation describe-stacks --stack-name game-collection-dev-api --query "Stacks[0].Outputs"
 
-# フロントエンドスタック
-aws cloudformation describe-stacks --stack-name game-collection-dev-frontend --query "Stacks[0].Outputs"
+# フロントエンドインフラスタック
+aws cloudformation describe-stacks --stack-name game-collection-dev-frontend-infra --query "Stacks[0].Outputs"
 ```
 
 取得した情報を元に、`.env.local` ファイルの環境変数を設定します。
 
-## 手動でのフロントエンドデプロイ
+## 変更の反映
 
-パイプラインを使用せずに手動でフロントエンドをデプロイする場合は、以下の手順を実行します。
-
-### 1. フロントエンドのビルド
+リポジトリに変更をプッシュすると、パイプラインが自動的に実行され、変更が反映されます。
 
 ```bash
-cd frontend
-npm run build  # または yarn build
+git add .
+git commit -m "変更を追加"
+git push
 ```
 
-### 2. ビルド成果物のS3アップロード
+## スタックの削除
+
+スタックを削除する場合は、以下の順序で削除します：
 
 ```bash
-aws s3 sync build/ s3://game-collection-dev-website/
-```
+# 親スタックを削除（すべてのネストされたスタックも削除されます）
+aws cloudformation delete-stack --stack-name game-collection-pipeline
 
-### 3. CloudFrontのキャッシュ無効化
+# 各CloudFormationスタックを個別に削除（必要に応じて）
+aws cloudformation delete-stack --stack-name game-collection-dev-frontend-infra
+aws cloudformation delete-stack --stack-name game-collection-dev-api
+aws cloudformation delete-stack --stack-name game-collection-dev-storage
+aws cloudformation delete-stack --stack-name game-collection-dev-auth
 
-```bash
-# CloudFront Distribution IDを取得
-DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name game-collection-dev-frontend --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text)
-
-# キャッシュ無効化
-aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
-```
-
-## アプリにアクセス
-
-CloudFrontのドメイン名を使用してアプリにアクセスできます：
-
-```bash
-# CloudFrontドメイン名を取得
-DOMAIN_NAME=$(aws cloudformation describe-stacks --stack-name game-collection-dev-frontend --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" --output text)
-
-echo "WebサイトURL: https://$DOMAIN_NAME"
+# テンプレート用S3バケットの削除
+aws s3 rm s3://game-collection-cfn-templates --recursive
+aws s3 rb s3://game-collection-cfn-templates
 ```
 
 ## トラブルシューティング
 
+### テンプレートURLが見つからないエラー
+ネストされたスタックのテンプレートURLがS3バケットで見つからない場合は、テンプレートが正しくアップロードされていることを確認してください。また、テンプレートURLのパスが正しいことを確認してください。
+
+### IAMロールの権限エラー
+デプロイ中にIAMロールの権限エラーが発生した場合は、`CAPABILITY_NAMED_IAM`パラメータが指定されていることを確認してください。
+
 ### パイプラインのエラー
+CodePipelineのデプロイ中にエラーが発生した場合は、AWSマネジメントコンソールでCodePipelineのステージを確認し、具体的なエラーメッセージを確認してください。
 
-- CodePipelineコンソールでエラーの詳細を確認
-- GitHubトークンのスコープと有効期限を確認
-- IAMロールのアクセス権限を確認
-
-### APIへの接続エラー
-
-- API Gateway CORSの設定を確認
-- Cognitoの認証情報が正しく設定されているか確認
-- APIエンドポイントURLが正しいか確認
-
-### S3へのアップロードエラー
-
-- IAMロールのアクセス権限を確認
-- S3バケット名が正しいか確認
-- CORS設定が適切か確認
-
-### CloudFormationデプロイエラー
-
-- エラーメッセージを確認し、リソース名やパラメータを修正
-- スタックの削除後に再デプロイを試行
+### CloudFrontキャッシュ無効化エラー
+CloudFrontキャッシュの無効化に失敗した場合は、Lambda関数のログを確認し、CloudFrontディストリビューションIDが正しく取得できているか確認してください。
