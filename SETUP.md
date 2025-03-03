@@ -49,21 +49,11 @@ npm start  # または yarn start
 
 ## AWSリソースのデプロイ
 
-CI/CDパイプラインはネストしたスタック構造を使用しており、まずパイプラインスタックをデプロイすることで、他のすべてのリソースが自動的にデプロイされます。
+このプロジェクトでは、すべてのインフラストラクチャリソースがCodePipelineによって管理されます。最初に初期パイプラインをデプロイし、その後パイプラインがすべてのリソースを自動的にデプロイします。
 
-### 1. S3バケットを作成（ネストされたスタックテンプレート用）
+### 1. パイプラインスタックのデプロイ
 
-CloudFormationはネストされたスタックのテンプレートをS3から読み込む必要があるため、まず一時的なS3バケットを作成します：
-
-```bash
-# バケットを作成
-aws s3 mb s3://game-collection-cfn-templates
-
-# テンプレートファイルをアップロード
-aws s3 cp infrastructure/pipeline/templates/ s3://game-collection-cfn-templates/ --recursive
-```
-
-### 2. パイプラインスタックのデプロイ
+まず、パイプライン本体とそのリソース（IAMロール、アーティファクトバケット）をデプロイします：
 
 ```bash
 aws cloudformation create-stack \
@@ -83,37 +73,28 @@ GitHubトークンは、以下のスコープを持つものを使用してく�
 - `repo`
 - `admin:repo_hook`
 
-### 3. スタック構造
+### 2. パイプライン実行フロー
 
-パイプラインスタックが以下のネストされたスタックを作成します：
+パイプラインスタックがデプロイされると、CodePipelineが自動的に起動し、以下の順序でリソースをデプロイします：
 
-1. **IAMスタック**：必要なIAMロール
-   - CodePipelineサービスロール
-   - CloudFormationサービスロール
-   - CodeBuildサービスロール
-   - Lambda実行ロール
+1. **ソースコード取得**: GitHubリポジトリからコードを取得
+2. **IAMリソースのデプロイ**: 各コンポーネント用のIAMロールをデプロイ
+3. **S3リソースのデプロイ**: 必要なS3バケットをデプロイ
+4. **CodeBuildリソースのデプロイ**: フロントエンドビルド用のCodeBuildプロジェクトをデプロイ
+5. **Lambdaリソースのデプロイ**: CloudFrontキャッシュ無効化用のLambda関数をデプロイ
+6. **アプリケーションスタックのデプロイ**: Cognito、DynamoDB、API Gateway、CloudFrontなどのアプリケーションスタックをデプロイ
+7. **フロントエンドビルド**: ReactアプリケーションをCodeBuildでビルド
+8. **フロントエンドデプロイ**: ビルド成果物をS3にデプロイし、CloudFrontキャッシュを無効化
 
-2. **S3スタック**：必要なS3バケット
-   - パイプラインアーティファクト用バケット
-   - Webサイトホスティング用バケット
+このフローにより、すべてのインフラストラクチャがコード管理され、自動的にデプロイされます。
 
-3. **CodeBuildスタック**：ビルドプロジェクト
-   - フロントエンドビルドプロジェクト
+### 3. パイプラインの進行状況確認
 
-4. **Lambdaスタック**：必要なLambda関数
-   - CloudFrontキャッシュ無効化関数
+パイプラインの進行状況は、AWS Management ConsoleのCodePipelineページで確認できます：
 
-### 4. パイプラインのデプロイフロー
-
-親スタックがデプロイされると、CodePipelineが作成され、次の順序でリソースがデプロイされます：
-
-1. GitHubからソースコードを取得
-2. 認証スタック（Cognito）のデプロイ
-3. ストレージスタック（S3、DynamoDB）のデプロイ
-4. APIスタック（API Gateway、Lambda）のデプロイ
-5. フロントエンドインフラスタック（CloudFront）のデプロイ
-6. フロントエンドのビルド
-7. S3へのデプロイとCloudFrontキャッシュの無効化
+```
+https://console.aws.amazon.com/codepipeline/home?region=<YOUR_REGION>#/view/game-collection-dev-pipeline
+```
 
 ## リソース情報の取得
 
@@ -145,35 +126,66 @@ git commit -m "変更を追加"
 git push
 ```
 
+インフラストラクチャの変更も同様にコードとしてコミットし、GitHubにプッシュすることで自動的にデプロイされます。
+
+## スタックの構造
+
+このプロジェクトでは以下のスタックが使用されています：
+
+1. **パイプラインスタック** (`game-collection-pipeline`)
+   - CodePipeline本体
+   - 初期IAMロール
+   - アーティファクトバケット
+
+2. **IAMスタック** (`game-collection-dev-iam`)
+   - CodeBuildサービスロール
+   - Lambda実行ロール
+   - CloudFormationサービスロール
+
+3. **S3スタック** (`game-collection-dev-s3`)
+   - Webサイトバケット
+   - サムネイルバケット
+
+4. **CodeBuildスタック** (`game-collection-dev-codebuild`)
+   - フロントエンドビルドプロジェクト
+
+5. **Lambdaスタック** (`game-collection-dev-lambda`)
+   - CloudFrontキャッシュ無効化関数
+
+6. **アプリケーションスタック**
+   - 認証スタック (`game-collection-dev-auth`)
+   - ストレージスタック (`game-collection-dev-storage`)
+   - APIスタック (`game-collection-dev-api`)
+   - フロントエンドインフラスタック (`game-collection-dev-frontend-infra`)
+
 ## スタックの削除
 
 スタックを削除する場合は、以下の順序で削除します：
 
 ```bash
-# 親スタックを削除（すべてのネストされたスタックも削除されます）
+# まずパイプラインスタックを削除
 aws cloudformation delete-stack --stack-name game-collection-pipeline
 
-# 各CloudFormationスタックを個別に削除（必要に応じて）
+# 次に各アプリケーションスタックを削除（必要に応じて）
 aws cloudformation delete-stack --stack-name game-collection-dev-frontend-infra
 aws cloudformation delete-stack --stack-name game-collection-dev-api
 aws cloudformation delete-stack --stack-name game-collection-dev-storage
 aws cloudformation delete-stack --stack-name game-collection-dev-auth
 
-# テンプレート用S3バケットの削除
-aws s3 rm s3://game-collection-cfn-templates --recursive
-aws s3 rb s3://game-collection-cfn-templates
+# 最後にインフラスタックを削除
+aws cloudformation delete-stack --stack-name game-collection-dev-lambda
+aws cloudformation delete-stack --stack-name game-collection-dev-codebuild
+aws cloudformation delete-stack --stack-name game-collection-dev-s3
+aws cloudformation delete-stack --stack-name game-collection-dev-iam
 ```
 
 ## トラブルシューティング
 
-### テンプレートURLが見つからないエラー
-ネストされたスタックのテンプレートURLがS3バケットで見つからない場合は、テンプレートが正しくアップロードされていることを確認してください。また、テンプレートURLのパスが正しいことを確認してください。
+### パイプラインのエラー
+パイプラインのデプロイやアクションで問題が発生した場合は、AWS Management ConsoleでCodePipelineのコンソールからエラーの詳細を確認し、対応するスタックまたはリソースを修正してください。
+
+### 依存関係のエラー
+スタック間に依存関係があるため、デプロイの順序が重要です。一部のスタックがデプロイされていない場合、依存するスタックもデプロイに失敗します。パイプラインの実行履歴を確認して、どのステージで失敗したかを特定してください。
 
 ### IAMロールの権限エラー
-デプロイ中にIAMロールの権限エラーが発生した場合は、`CAPABILITY_NAMED_IAM`パラメータが指定されていることを確認してください。
-
-### パイプラインのエラー
-CodePipelineのデプロイ中にエラーが発生した場合は、AWSマネジメントコンソールでCodePipelineのステージを確認し、具体的なエラーメッセージを確認してください。
-
-### CloudFrontキャッシュ無効化エラー
-CloudFrontキャッシュの無効化に失敗した場合は、Lambda関数のログを確認し、CloudFrontディストリビューションIDが正しく取得できているか確認してください。
+スタックデプロイ中にIAMロールの権限エラーが発生した場合は、`CAPABILITY_NAMED_IAM`パラメータが指定されていることを確認してください。また、必要なIAM権限がCloudFormationサービスロールに付与されていることを確認してください。
