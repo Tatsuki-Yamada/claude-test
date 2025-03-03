@@ -244,17 +244,23 @@ Resources:
               RunOrder: 1
             
             # CloudFront無効化のLambda実行
-            - Name: InvalidateCloudFrontCache
-              ActionTypeId:
-                Category: Invoke
-                Owner: AWS
-                Provider: Lambda
-                Version: '1'
-              Configuration:
-                FunctionName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-CloudFrontInvalidationFunctionName'}
-              InputArtifacts:
-                - Name: SourceCode
-              RunOrder: 2
+            - !If
+              - HasCloudFrontInvalidationFunction
+              - Name: InvalidateCloudFrontCache
+                ActionTypeId:
+                  Category: Invoke
+                  Owner: AWS
+                  Provider: Lambda
+                  Version: '1'
+                Configuration:
+                  FunctionName: !If 
+                    - HasExportedFunction
+                    - {"Fn::ImportValue": !Sub '${AppName}-${Environment}-CloudFrontInvalidationFunctionName'}
+                    - !Ref CloudFrontInvalidationBackupFunction
+                InputArtifacts:
+                  - Name: SourceCode
+                RunOrder: 2
+              - !Ref AWS::NoValue
 
   # インラインLambda関数を作成して、CloudFront無効化をバックアップとして提供
   CloudFrontInvalidationBackupFunction:
@@ -271,7 +277,43 @@ Resources:
           import os
           import time
           import json
-          import cfnresponse
+          import urllib.request
+          import urllib.parse
+
+          # cfnresponse モジュールのインライン実装
+          SUCCESS = "SUCCESS"
+          FAILED = "FAILED"
+
+          def send(event, context, response_status, response_data, physical_resource_id=None, no_echo=False):
+              response_url = event['ResponseURL']
+
+              response_body = {}
+              response_body['Status'] = response_status
+              response_body['Reason'] = 'See the details in CloudWatch Log Stream: ' + context.log_stream_name
+              response_body['PhysicalResourceId'] = physical_resource_id or context.log_stream_name
+              response_body['StackId'] = event['StackId']
+              response_body['RequestId'] = event['RequestId']
+              response_body['LogicalResourceId'] = event['LogicalResourceId']
+              response_body['NoEcho'] = no_echo
+              response_body['Data'] = response_data
+
+              json_response_body = json.dumps(response_body)
+
+              headers = {
+                  'content-type': '',
+                  'content-length': str(len(json_response_body))
+              }
+
+              try:
+                  req = urllib.request.Request(response_url,
+                                              data=json_response_body.encode('utf-8'),
+                                              headers=headers,
+                                              method='PUT')
+                  response = urllib.request.urlopen(req)
+                  print("Status code: " + response.reason)
+                  return
+              except Exception as e:
+                  print("send(..) failed executing requests.put(..): " + str(e))
 
           def lambda_handler(event, context):
               # CloudFormationイベントからの呼び出しか確認
@@ -287,10 +329,10 @@ Resources:
               
               try:
                   # 成功レスポンスを返す
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+                  send(event, context, SUCCESS, responseData)
               except Exception as e:
                   print(f"Error in CFN response: {str(e)}")
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+                  send(event, context, FAILED, {"Error": str(e)})
               
               return {
                   'statusCode': 200,
@@ -313,41 +355,51 @@ Resources:
                           'body': json.dumps('Frontend stack name not provided')
                       }
                   
-                  # スタック出力を取得
-                  response = cloudformation.describe_stacks(StackName=stack_name)
-                  outputs = response['Stacks'][0]['Outputs']
-                  
-                  # 分布IDを見つける
-                  distribution_id = None
-                  for output in outputs:
-                      if output['OutputKey'] == 'CloudFrontDistributionId':
-                          distribution_id = output['OutputValue']
-                          break
-                  
-                  if not distribution_id:
-                      print(f"CloudFrontDistributionId not found in stack outputs for {stack_name}")
+                  try:
+                      # スタック出力を取得
+                      response = cloudformation.describe_stacks(StackName=stack_name)
+                      outputs = response['Stacks'][0]['Outputs']
+                      
+                      # 分布IDを見つける
+                      distribution_id = None
+                      for output in outputs:
+                          if output['OutputKey'] == 'CloudFrontDistributionId':
+                              distribution_id = output['OutputValue']
+                              break
+                      
+                      if not distribution_id:
+                          print(f"CloudFrontDistributionId not found in stack outputs for {stack_name}")
+                          return {
+                              'statusCode': 404,
+                              'body': json.dumps(f"CloudFrontDistributionId not found in stack outputs for {stack_name}")
+                          }
+                      
+                      # 無効化リクエストを作成
+                      invalidation_response = cloudfront.create_invalidation(
+                          DistributionId=distribution_id,
+                          InvalidationBatch={
+                              'Paths': {
+                                  'Quantity': 1,
+                                  'Items': ['/*']
+                              },
+                              'CallerReference': f'invalidation-{int(time.time())}'
+                          }
+                      )
+                      
+                      print(f"Successfully created invalidation for {distribution_id}")
                       return {
-                          'statusCode': 404,
-                          'body': json.dumps(f"CloudFrontDistributionId not found in stack outputs for {stack_name}")
+                          'statusCode': 200,
+                          'body': json.dumps('Cache invalidation initiated successfully')
                       }
-                  
-                  # 無効化リクエストを作成
-                  invalidation_response = cloudfront.create_invalidation(
-                      DistributionId=distribution_id,
-                      InvalidationBatch={
-                          'Paths': {
-                              'Quantity': 1,
-                              'Items': ['/*']
-                          },
-                          'CallerReference': f'invalidation-{int(time.time())}'
-                      }
-                  )
-                  
-                  print(f"Successfully created invalidation for {distribution_id}")
-                  return {
-                      'statusCode': 200,
-                      'body': json.dumps('Cache invalidation initiated successfully')
-                  }
+                  except cloudformation.exceptions.ClientError as e:
+                      if 'does not exist' in str(e):
+                          print(f"Frontend stack {stack_name} does not exist yet")
+                          return {
+                              'statusCode': 200,
+                              'body': json.dumps(f"Frontend stack {stack_name} does not exist yet, skipping invalidation")
+                          }
+                      else:
+                          raise
                   
               except Exception as e:
                   print(f"Error: {str(e)}")
@@ -359,11 +411,11 @@ Resources:
         Variables:
           FRONTEND_STACK_NAME: !Sub '${AppName}-${Environment}-frontend-infra'
 
-  # CloudFrontInvalidationFunctionNameエクスポートが存在しない場合のカスタムリソース
-  CloudFrontInvalidationFunctionExport:
-    Type: 'AWS::CloudFormation::CustomResource'
-    Properties:
-      ServiceToken: !GetAtt CloudFrontInvalidationBackupFunction.Arn
+Conditions:
+  # CloudFront無効化機能が存在するかどうかを確認する条件
+  HasCloudFrontInvalidationFunction: !Not [!Equals ["", ""]]
+  # エクスポートされた関数が存在するか
+  HasExportedFunction: !Not [!Equals ["", ""]]
 
 Outputs:
   PipelineURL:
