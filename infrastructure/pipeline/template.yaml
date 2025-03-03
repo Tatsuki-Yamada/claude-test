@@ -36,173 +36,67 @@ Parameters:
     Description: 'Repository branch to deploy'
 
 Resources:
-  # CodePipeline Artifacts Bucket
-  ArtifactsBucket:
-    Type: 'AWS::S3::Bucket'
+  # Deploy IAM Resources
+  IAMStack:
+    Type: 'AWS::CloudFormation::Stack'
     Properties:
-      BucketName: !Sub '${AppName}-${Environment}-pipeline-artifacts'
-      VersioningConfiguration:
-        Status: Enabled
-      LifecycleConfiguration:
-        Rules:
-          - Status: Enabled
-            ExpirationInDays: 30
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 7
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+      TemplateURL: './templates/iam.yaml'
+      Parameters:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
+      TimeoutInMinutes: 10
 
-  # CodePipeline Service Role
-  CodePipelineServiceRole:
-    Type: 'AWS::IAM::Role'
+  # Deploy S3 Resources
+  S3Stack:
+    Type: 'AWS::CloudFormation::Stack'
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: codepipeline.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/AWSCodeStarFullAccess'
-      Policies:
-        - PolicyName: CodePipelineAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - 's3:GetObject'
-                  - 's3:GetObjectVersion'
-                  - 's3:GetBucketVersioning'
-                  - 's3:PutObject'
-                Resource:
-                  - !GetAtt ArtifactsBucket.Arn
-                  - !Sub '${ArtifactsBucket.Arn}/*'
-              - Effect: Allow
-                Action:
-                  - 'cloudformation:CreateStack'
-                  - 'cloudformation:DeleteStack'
-                  - 'cloudformation:DescribeStacks'
-                  - 'cloudformation:UpdateStack'
-                  - 'cloudformation:CreateChangeSet'
-                  - 'cloudformation:DeleteChangeSet'
-                  - 'cloudformation:DescribeChangeSet'
-                  - 'cloudformation:ExecuteChangeSet'
-                  - 'cloudformation:SetStackPolicy'
-                  - 'cloudformation:ValidateTemplate'
-                  - 'cloudformation:ListStackResources'
-                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppName}-${Environment}-*/*'
-              - Effect: Allow
-                Action:
-                  - 'iam:PassRole'
-                Resource: '*'
-                Condition:
-                  StringEqualsIfExists:
-                    'iam:PassedToService':
-                      - cloudformation.amazonaws.com
-                      - codebuild.amazonaws.com
+      TemplateURL: './templates/s3.yaml'
+      Parameters:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
+      TimeoutInMinutes: 10
 
-  # CloudFormation Service Role
-  CloudFormationServiceRole:
-    Type: 'AWS::IAM::Role'
+  # Deploy CodeBuild Resources
+  CodeBuildStack:
+    Type: 'AWS::CloudFormation::Stack'
+    DependsOn:
+      - IAMStack
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: cloudformation.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/AdministratorAccess'
+      TemplateURL: './templates/codebuild.yaml'
+      Parameters:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
+        CodeBuildServiceRoleArn: !GetAtt IAMStack.Outputs.CodeBuildServiceRoleArn
+      TimeoutInMinutes: 10
 
-  # CodeBuild Project for Frontend Build
-  FrontendBuildProject:
-    Type: 'AWS::CodeBuild::Project'
+  # Deploy Lambda Resources
+  LambdaStack:
+    Type: 'AWS::CloudFormation::Stack'
+    DependsOn:
+      - IAMStack
     Properties:
-      Name: !Sub '${AppName}-${Environment}-frontend-build'
-      Description: 'Build frontend for Game Collection App'
-      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
-      Artifacts:
-        Type: CODEPIPELINE
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
-        PrivilegedMode: false
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                nodejs: 14
-              commands:
-                - cd frontend
-                - npm install
-            build:
-              commands:
-                - npm run build
-          artifacts:
-            base-directory: frontend/build
-            files:
-              - '**/*'
-      TimeoutInMinutes: 15
-
-  # CodeBuild Service Role
-  CodeBuildServiceRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: codebuild.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
-        - 'arn:aws:iam::aws:policy/CloudWatchLogsFullAccess'
-      Policies:
-        - PolicyName: CodeBuildAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - 'codebuild:StartBuild'
-                  - 'codebuild:BatchGetBuilds'
-                Resource: '*'
-
-  # S3 Bucket for Static Web Hosting
-  WebsiteBucket:
-    Type: 'AWS::S3::Bucket'
-    Properties:
-      BucketName: !Sub '${AppName}-${Environment}-website'
-      AccessControl: Private
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: index.html
+      TemplateURL: './templates/lambda.yaml'
+      Parameters:
+        AppName: !Ref AppName
+        Environment: !Ref Environment
+        LambdaExecutionRoleArn: !GetAtt IAMStack.Outputs.LambdaExecutionRoleArn
+        FrontendStackName: !Sub '${AppName}-${Environment}-frontend-infra'
+      TimeoutInMinutes: 10
 
   # CI/CD Pipeline
   GameCollectionPipeline:
     Type: 'AWS::CodePipeline::Pipeline'
+    DependsOn:
+      - IAMStack
+      - S3Stack
+      - CodeBuildStack
+      - LambdaStack
     Properties:
       Name: !Sub '${AppName}-${Environment}-pipeline'
-      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      RoleArn: !GetAtt IAMStack.Outputs.CodePipelineServiceRoleArn
       ArtifactStore:
         Type: S3
-        Location: !Ref ArtifactsBucket
+        Location: !GetAtt S3Stack.Outputs.ArtifactsBucketName
       Stages:
         # Source Stage
         - Name: Source
@@ -232,7 +126,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
                 StackName: !Sub '${AppName}-${Environment}-auth'
                 TemplatePath: 'SourceCode::infrastructure/auth/template.yaml'
                 TemplateConfiguration: 'SourceCode::infrastructure/auth/config.json'
@@ -257,7 +151,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
                 StackName: !Sub '${AppName}-${Environment}-storage'
                 TemplatePath: 'SourceCode::infrastructure/storage/template.yaml'
                 ParameterOverrides: !Sub |
@@ -281,7 +175,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
                 StackName: !Sub '${AppName}-${Environment}-api'
                 TemplatePath: 'SourceCode::infrastructure/api/template.yaml'
                 ParameterOverrides: !Sub |
@@ -305,7 +199,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
                 StackName: !Sub '${AppName}-${Environment}-frontend-infra'
                 TemplatePath: 'SourceCode::infrastructure/frontend/template.yaml'
                 ParameterOverrides: !Sub |
@@ -328,7 +222,7 @@ Resources:
                 Provider: CodeBuild
                 Version: '1'
               Configuration:
-                ProjectName: !Ref FrontendBuildProject
+                ProjectName: !GetAtt CodeBuildStack.Outputs.FrontendBuildProjectName
               InputArtifacts:
                 - Name: SourceCode
               OutputArtifacts:
@@ -344,7 +238,7 @@ Resources:
                 Provider: S3
                 Version: '1'
               Configuration:
-                BucketName: !Ref WebsiteBucket
+                BucketName: !GetAtt S3Stack.Outputs.WebsiteBucketName
                 Extract: true
               InputArtifacts:
                 - Name: BuildOutput
@@ -356,113 +250,12 @@ Resources:
                 Provider: Lambda
                 Version: '1'
               Configuration:
-                FunctionName: !Ref CloudFrontInvalidationFunction
+                FunctionName: !GetAtt LambdaStack.Outputs.CloudFrontInvalidationFunctionName
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 2
-
-  # Lambda Function for CloudFront Cache Invalidation
-  CloudFrontInvalidationFunction:
-    Type: 'AWS::Lambda::Function'
-    Properties:
-      FunctionName: !Sub '${AppName}-${Environment}-cf-invalidation'
-      Handler: index.lambda_handler
-      Runtime: python3.9
-      Timeout: 60
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        ZipFile: |
-          import boto3
-          import os
-          import time
-          import json
-
-          def lambda_handler(event, context):
-              # Initialize AWS clients
-              cloudfront = boto3.client('cloudfront')
-              cloudformation = boto3.client('cloudformation')
-              
-              # Get CloudFront distribution ID from CloudFormation stack outputs
-              stack_name = os.environ['FRONTEND_STACK_NAME']
-              
-              try:
-                  # Get stack outputs
-                  response = cloudformation.describe_stacks(StackName=stack_name)
-                  outputs = response['Stacks'][0]['Outputs']
-                  
-                  # Find the distribution ID
-                  distribution_id = None
-                  for output in outputs:
-                      if output['OutputKey'] == 'CloudFrontDistributionId':
-                          distribution_id = output['OutputValue']
-                          break
-                  
-                  if not distribution_id:
-                      raise Exception(f"CloudFrontDistributionId not found in stack outputs for {stack_name}")
-                  
-                  # Create invalidation request
-                  invalidation_response = cloudfront.create_invalidation(
-                      DistributionId=distribution_id,
-                      InvalidationBatch={
-                          'Paths': {
-                              'Quantity': 1,
-                              'Items': ['/*']
-                          },
-                          'CallerReference': f'invalidation-{int(time.time())}'
-                      }
-                  )
-                  
-                  print(f"Successfully created invalidation for {distribution_id}")
-                  return {
-                      'statusCode': 200,
-                      'body': json.dumps('Cache invalidation initiated successfully')
-                  }
-                  
-              except Exception as e:
-                  print(f"Error: {str(e)}")
-                  raise e
-      Environment:
-        Variables:
-          FRONTEND_STACK_NAME: !Sub '${AppName}-${Environment}-frontend-infra'
-
-  # Lambda Execution Role
-  LambdaExecutionRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
-      Policies:
-        - PolicyName: CloudFrontAndCloudFormationAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - 'cloudfront:CreateInvalidation'
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - 'cloudformation:DescribeStacks'
-                Resource: '*'
 
 Outputs:
   PipelineURL:
     Description: 'URL to the CodePipeline console'
     Value: !Sub 'https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${GameCollectionPipeline}'
-  
-  ArtifactsBucket:
-    Description: 'S3 bucket for pipeline artifacts'
-    Value: !Ref ArtifactsBucket
-    
-  WebsiteBucketName:
-    Description: 'Name of the S3 bucket for website hosting'
-    Value: !Ref WebsiteBucket
-    Export:
-      Name: !Sub '${AppName}-${Environment}-WebsiteBucketName'
