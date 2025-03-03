@@ -366,54 +366,61 @@ Resources:
     Type: 'AWS::Lambda::Function'
     Properties:
       FunctionName: !Sub '${AppName}-${Environment}-cf-invalidation'
-      Handler: index.handler
-      Runtime: nodejs18.x
+      Handler: index.lambda_handler
+      Runtime: python3.9
       Timeout: 60
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
         ZipFile: |
-          const AWS = require('aws-sdk');
-          
-          exports.handler = async (event) => {
-              const cloudfront = new AWS.CloudFront();
+          import boto3
+          import os
+          import time
+          import json
+
+          def lambda_handler(event, context):
+              # Initialize AWS clients
+              cloudfront = boto3.client('cloudfront')
+              cloudformation = boto3.client('cloudformation')
               
-              // Get CloudFront distribution ID from exports
-              const cloudformation = new AWS.CloudFormation();
-              const stackName = process.env.FRONTEND_STACK_NAME;
+              # Get CloudFront distribution ID from CloudFormation stack outputs
+              stack_name = os.environ['FRONTEND_STACK_NAME']
               
-              try {
-                  const response = await cloudformation.describeStacks({
-                      StackName: stackName
-                  }).promise();
+              try:
+                  # Get stack outputs
+                  response = cloudformation.describe_stacks(StackName=stack_name)
+                  outputs = response['Stacks'][0]['Outputs']
                   
-                  const outputs = response.Stacks[0].Outputs;
-                  const distributionIdOutput = outputs.find(output => output.OutputKey === 'CloudFrontDistributionId');
-                  const distributionId = distributionIdOutput.OutputValue;
+                  # Find the distribution ID
+                  distribution_id = None
+                  for output in outputs:
+                      if output['OutputKey'] == 'CloudFrontDistributionId':
+                          distribution_id = output['OutputValue']
+                          break
                   
-                  // Create invalidation
-                  const invalidationParams = {
-                      DistributionId: distributionId,
-                      InvalidationBatch: {
-                          CallerReference: `invalidation-${Date.now()}`,
-                          Paths: {
-                              Quantity: 1,
-                              Items: ['/*']
-                          }
+                  if not distribution_id:
+                      raise Exception(f"CloudFrontDistributionId not found in stack outputs for {stack_name}")
+                  
+                  # Create invalidation request
+                  invalidation_response = cloudfront.create_invalidation(
+                      DistributionId=distribution_id,
+                      InvalidationBatch={
+                          'Paths': {
+                              'Quantity': 1,
+                              'Items': ['/*']
+                          },
+                          'CallerReference': f'invalidation-{int(time.time())}'
                       }
-                  };
+                  )
                   
-                  await cloudfront.createInvalidation(invalidationParams).promise();
-                  console.log(`Successfully created invalidation for ${distributionId}`);
-                  
+                  print(f"Successfully created invalidation for {distribution_id}")
                   return {
-                      statusCode: 200,
-                      body: JSON.stringify('Cache invalidation initiated successfully')
-                  };
-              } catch (error) {
-                  console.error('Error:', error);
-                  throw error;
-              }
-          };
+                      'statusCode': 200,
+                      'body': json.dumps('Cache invalidation initiated successfully')
+                  }
+                  
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  raise e
       Environment:
         Variables:
           FRONTEND_STACK_NAME: !Sub '${AppName}-${Environment}-frontend-infra'
