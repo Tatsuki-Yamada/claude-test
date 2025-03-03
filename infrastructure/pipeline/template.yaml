@@ -36,67 +36,101 @@ Parameters:
     Description: 'Repository branch to deploy'
 
 Resources:
-  # Deploy IAM Resources
-  IAMStack:
-    Type: 'AWS::CloudFormation::Stack'
+  # CodePipeline Service Role
+  CodePipelineServiceRole:
+    Type: 'AWS::IAM::Role'
     Properties:
-      TemplateURL: './templates/iam.yaml'
-      Parameters:
-        AppName: !Ref AppName
-        Environment: !Ref Environment
-      TimeoutInMinutes: 10
+      RoleName: !Sub '${AppName}-${Environment}-pipeline-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCodeStarFullAccess'
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                  - 's3:PutObject'
+                Resource: 
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub '${ArtifactsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:CreateStack'
+                  - 'cloudformation:DeleteStack'
+                  - 'cloudformation:DescribeStacks'
+                  - 'cloudformation:UpdateStack'
+                  - 'cloudformation:CreateChangeSet'
+                  - 'cloudformation:DeleteChangeSet'
+                  - 'cloudformation:DescribeChangeSet'
+                  - 'cloudformation:ExecuteChangeSet'
+                  - 'cloudformation:SetStackPolicy'
+                  - 'cloudformation:ValidateTemplate'
+                  - 'cloudformation:ListStackResources'
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppName}-${Environment}-*/*'
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: '*'
+                Condition:
+                  StringEqualsIfExists:
+                    'iam:PassedToService':
+                      - cloudformation.amazonaws.com
+                      - codebuild.amazonaws.com
 
-  # Deploy S3 Resources
-  S3Stack:
-    Type: 'AWS::CloudFormation::Stack'
+  # CloudFormation Service Role
+  CloudFormationServiceRole:
+    Type: 'AWS::IAM::Role'
     Properties:
-      TemplateURL: './templates/s3.yaml'
-      Parameters:
-        AppName: !Ref AppName
-        Environment: !Ref Environment
-      TimeoutInMinutes: 10
+      RoleName: !Sub '${AppName}-${Environment}-cloudformation-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AdministratorAccess'
 
-  # Deploy CodeBuild Resources
-  CodeBuildStack:
-    Type: 'AWS::CloudFormation::Stack'
-    DependsOn:
-      - IAMStack
+  # CodePipeline Artifacts Bucket
+  ArtifactsBucket:
+    Type: 'AWS::S3::Bucket'
     Properties:
-      TemplateURL: './templates/codebuild.yaml'
-      Parameters:
-        AppName: !Ref AppName
-        Environment: !Ref Environment
-        CodeBuildServiceRoleArn: !GetAtt IAMStack.Outputs.CodeBuildServiceRoleArn
-      TimeoutInMinutes: 10
-
-  # Deploy Lambda Resources
-  LambdaStack:
-    Type: 'AWS::CloudFormation::Stack'
-    DependsOn:
-      - IAMStack
-    Properties:
-      TemplateURL: './templates/lambda.yaml'
-      Parameters:
-        AppName: !Ref AppName
-        Environment: !Ref Environment
-        LambdaExecutionRoleArn: !GetAtt IAMStack.Outputs.LambdaExecutionRoleArn
-        FrontendStackName: !Sub '${AppName}-${Environment}-frontend-infra'
-      TimeoutInMinutes: 10
+      BucketName: !Sub '${AppName}-${Environment}-pipeline-artifacts'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            ExpirationInDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
 
   # CI/CD Pipeline
   GameCollectionPipeline:
     Type: 'AWS::CodePipeline::Pipeline'
-    DependsOn:
-      - IAMStack
-      - S3Stack
-      - CodeBuildStack
-      - LambdaStack
     Properties:
       Name: !Sub '${AppName}-${Environment}-pipeline'
-      RoleArn: !GetAtt IAMStack.Outputs.CodePipelineServiceRoleArn
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
       ArtifactStore:
         Type: S3
-        Location: !GetAtt S3Stack.Outputs.ArtifactsBucketName
+        Location: !Ref ArtifactsBucket
       Stages:
         # Source Stage
         - Name: Source
@@ -115,6 +149,105 @@ Resources:
               OutputArtifacts:
                 - Name: SourceCode
         
+        # Deploy IAM Resources
+        - Name: DeployIAMResources
+          Actions:
+            - Name: DeployIAMResources
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                StackName: !Sub '${AppName}-${Environment}-iam'
+                TemplatePath: 'SourceCode::infrastructure/pipeline/templates/iam.yaml'
+                ParameterOverrides: !Sub |
+                  {
+                    "AppName": "${AppName}",
+                    "Environment": "${Environment}"
+                  }
+                Capabilities: CAPABILITY_NAMED_IAM
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+        
+        # Deploy S3 Resources
+        - Name: DeployS3Resources
+          Actions:
+            - Name: DeployS3Resources
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                StackName: !Sub '${AppName}-${Environment}-s3'
+                TemplatePath: 'SourceCode::infrastructure/pipeline/templates/s3.yaml'
+                ParameterOverrides: !Sub |
+                  {
+                    "AppName": "${AppName}",
+                    "Environment": "${Environment}"
+                  }
+                Capabilities: CAPABILITY_NAMED_IAM
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+        
+        # Deploy CodeBuild Resources
+        - Name: DeployCodeBuildResources
+          Actions:
+            - Name: DeployCodeBuildResources
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                StackName: !Sub '${AppName}-${Environment}-codebuild'
+                TemplatePath: 'SourceCode::infrastructure/pipeline/templates/codebuild.yaml'
+                ParameterOverrides: !Sub |
+                  {
+                    "AppName": "${AppName}",
+                    "Environment": "${Environment}",
+                    "CodeBuildServiceRoleArn": {"Fn::ImportValue": "${AppName}-${Environment}-CodeBuildServiceRoleArn"}
+                  }
+                Capabilities: CAPABILITY_NAMED_IAM
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+        
+        # Deploy Lambda Resources
+        - Name: DeployLambdaResources
+          Actions:
+            - Name: DeployLambdaResources
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                StackName: !Sub '${AppName}-${Environment}-lambda'
+                TemplatePath: 'SourceCode::infrastructure/pipeline/templates/lambda.yaml'
+                ParameterOverrides: !Sub |
+                  {
+                    "AppName": "${AppName}",
+                    "Environment": "${Environment}",
+                    "LambdaExecutionRoleArn": {"Fn::ImportValue": "${AppName}-${Environment}-LambdaExecutionRoleArn"},
+                    "FrontendStackName": "${AppName}-${Environment}-frontend-infra"
+                  }
+                Capabilities: CAPABILITY_NAMED_IAM
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+        
         # Deploy Auth Stack
         - Name: DeployAuthStack
           Actions:
@@ -126,7 +259,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 StackName: !Sub '${AppName}-${Environment}-auth'
                 TemplatePath: 'SourceCode::infrastructure/auth/template.yaml'
                 TemplateConfiguration: 'SourceCode::infrastructure/auth/config.json'
@@ -151,7 +284,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 StackName: !Sub '${AppName}-${Environment}-storage'
                 TemplatePath: 'SourceCode::infrastructure/storage/template.yaml'
                 ParameterOverrides: !Sub |
@@ -175,7 +308,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 StackName: !Sub '${AppName}-${Environment}-api'
                 TemplatePath: 'SourceCode::infrastructure/api/template.yaml'
                 ParameterOverrides: !Sub |
@@ -199,7 +332,7 @@ Resources:
                 Version: '1'
               Configuration:
                 ActionMode: CREATE_UPDATE
-                RoleArn: !GetAtt IAMStack.Outputs.CloudFormationServiceRoleArn
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 StackName: !Sub '${AppName}-${Environment}-frontend-infra'
                 TemplatePath: 'SourceCode::infrastructure/frontend/template.yaml'
                 ParameterOverrides: !Sub |
@@ -222,7 +355,7 @@ Resources:
                 Provider: CodeBuild
                 Version: '1'
               Configuration:
-                ProjectName: !GetAtt CodeBuildStack.Outputs.FrontendBuildProjectName
+                ProjectName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-FrontendBuildProjectName'}
               InputArtifacts:
                 - Name: SourceCode
               OutputArtifacts:
@@ -238,7 +371,7 @@ Resources:
                 Provider: S3
                 Version: '1'
               Configuration:
-                BucketName: !GetAtt S3Stack.Outputs.WebsiteBucketName
+                BucketName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-WebsiteBucketName'}
                 Extract: true
               InputArtifacts:
                 - Name: BuildOutput
@@ -250,7 +383,7 @@ Resources:
                 Provider: Lambda
                 Version: '1'
               Configuration:
-                FunctionName: !GetAtt LambdaStack.Outputs.CloudFrontInvalidationFunctionName
+                FunctionName: {"Fn::ImportValue": !Sub '${AppName}-${Environment}-CloudFrontInvalidationFunctionName'}
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 2
@@ -259,3 +392,9 @@ Outputs:
   PipelineURL:
     Description: 'URL to the CodePipeline console'
     Value: !Sub 'https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${GameCollectionPipeline}'
+  
+  ArtifactsBucketName:
+    Description: 'Name of the S3 bucket for pipeline artifacts'
+    Value: !Ref ArtifactsBucket
+    Export:
+      Name: !Sub '${AppName}-${Environment}-ArtifactsBucketName'
