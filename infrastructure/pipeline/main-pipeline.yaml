@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 Photo Gallery CI/CD Pipeline'
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: Tatsuki-Yamada
+    Description: GitHub repository owner
+  
+  GitHubRepo:
+    Type: String
+    Default: claude-test
+    Description: GitHub repository name
+  
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub repository branch
+  
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub OAuth token
+  
+  PrerequisitesStackName:
+    Type: String
+    Default: s3-photo-gallery-prerequisites
+    Description: Name of the prerequisite resources CloudFormation stack
+
+Resources:
+  # CodeBuild project for building and deploying the React app
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-build'
+      Description: 'Build and deploy the S3 Photo Gallery React app'
+      ServiceRole: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: true
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 14
+              commands:
+                - echo Installing dependencies...
+                - cd frontend
+                - npm install
+            build:
+              commands:
+                - echo Building the React application...
+                - npm run build
+            post_build:
+              commands:
+                - echo Build completed on `date`
+          artifacts:
+            base-directory: frontend/build
+            files:
+              - '**/*'
+          cache:
+            paths:
+              - 'frontend/node_modules/**/*'
+      TimeoutInMinutes: 10
+
+  # CodePipeline
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${AWS::StackName}-pipeline'
+      RoleArn: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodePipelineServiceRoleArn'
+      ArtifactStore:
+        Type: S3
+        Location: 
+          Fn::ImportValue: !Sub '${PrerequisitesStackName}-ArtifactBucketName'
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: SourceCode
+        
+        - Name: DeployResources
+          Actions:
+            # Deploy S3 bucket
+            - Name: DeployS3Resources
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: 
+                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
+                StackName: !Sub '${AWS::StackName}-s3-resources'
+                TemplatePath: SourceCode::infrastructure/resources/s3-resources.yaml
+                Capabilities: CAPABILITY_NAMED_IAM
+                ParameterOverrides: !Sub '{"StackName": "${AWS::StackName}"}'
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+            
+            # Deploy CloudFront and hosting resources (once S3 is ready)
+            - Name: DeployHostingResources
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: 
+                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
+                StackName: !Sub '${AWS::StackName}-hosting-resources'
+                TemplatePath: SourceCode::infrastructure/resources/hosting-resources.yaml
+                Capabilities: CAPABILITY_NAMED_IAM
+                ParameterOverrides: !Sub '{"StackName": "${AWS::StackName}"}'
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 2
+        
+        - Name: BuildAndDeploy
+          Actions:
+            - Name: BuildAndDeployApp
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref BuildProject
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+            
+            - Name: DeployToS3
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              Configuration:
+                BucketName: 
+                  Fn::ImportValue: !Sub '${AWS::StackName}-s3-resources-WebsiteBucketName'
+                Extract: true
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 2
+
+Outputs:
+  PipelineUrl:
+    Description: URL to the CodePipeline console
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}
