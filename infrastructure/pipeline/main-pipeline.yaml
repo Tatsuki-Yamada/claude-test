@@ -71,6 +71,104 @@ Resources:
               - 'frontend/node_modules/**/*'
       TimeoutInMinutes: 10
 
+  # S3バケットをデプロイするためのCodeBuildプロジェクト
+  DeployS3ResourcesProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-deploy-s3-resources'
+      Description: 'Deploy S3 resources with CloudFormation'
+      ServiceRole: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: false
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo Deploying S3 resources...
+                - aws cloudformation deploy --template-file infrastructure/resources/s3-resources.yaml --stack-name ${STACK_NAME}-s3-resources --parameter-overrides StackName=${STACK_NAME} --capabilities CAPABILITY_NAMED_IAM
+            post_build:
+              commands:
+                - echo S3 resources deployed
+          artifacts:
+            files:
+              - infrastructure/resources/s3-resources.yaml
+      TimeoutInMinutes: 10
+      
+  # ホスティングリソースをデプロイするためのCodeBuildプロジェクト
+  DeployHostingResourcesProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-deploy-hosting-resources'
+      Description: 'Deploy hosting resources with CloudFormation'
+      ServiceRole: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: false
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo Deploying hosting resources...
+                - aws cloudformation deploy --template-file infrastructure/resources/hosting-resources.yaml --stack-name ${STACK_NAME}-hosting-resources --parameter-overrides StackName=${STACK_NAME} --capabilities CAPABILITY_NAMED_IAM
+            post_build:
+              commands:
+                - echo Hosting resources deployed
+          artifacts:
+            files:
+              - infrastructure/resources/hosting-resources.yaml
+      TimeoutInMinutes: 10
+
+  # S3にデプロイするためのCodeBuildプロジェクト
+  DeployToS3Project:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-deploy-to-s3'
+      Description: 'Deploy website to S3 bucket'
+      ServiceRole: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: false
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo Deploying to S3 bucket...
+                - export WEBSITE_BUCKET=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-s3-resources --query "Stacks[0].Outputs[?ExportName=='${STACK_NAME}-s3-resources-WebsiteBucketName'].OutputValue" --output text)
+                - echo "Website bucket: $WEBSITE_BUCKET"
+                - aws s3 sync . s3://$WEBSITE_BUCKET/ --delete
+            post_build:
+              commands:
+                - echo Website deployed to S3
+          artifacts:
+            files:
+              - '**/*'
+      TimeoutInMinutes: 10
+
   # CodePipeline
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -101,40 +199,30 @@ Resources:
         
         - Name: DeployResources
           Actions:
-            # Deploy S3 bucket
+            # S3リソースをデプロイ
             - Name: DeployS3Resources
               ActionTypeId:
-                Category: Deploy
+                Category: Build
                 Owner: AWS
-                Provider: CloudFormation
+                Provider: CodeBuild
                 Version: '1'
               Configuration:
-                ActionMode: CREATE_UPDATE
-                RoleArn: 
-                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
-                StackName: !Sub '${AWS::StackName}-s3-resources'
-                TemplatePath: SourceCode::infrastructure/resources/s3-resources.yaml
-                Capabilities: CAPABILITY_NAMED_IAM
-                ParameterOverrides: !Sub '{"StackName": "${AWS::StackName}"}'
+                ProjectName: !Ref DeployS3ResourcesProject
+                EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 1
             
-            # Deploy CloudFront and hosting resources (once S3 is ready)
+            # ホスティングリソースをデプロイ
             - Name: DeployHostingResources
               ActionTypeId:
-                Category: Deploy
+                Category: Build
                 Owner: AWS
-                Provider: CloudFormation
+                Provider: CodeBuild
                 Version: '1'
               Configuration:
-                ActionMode: CREATE_UPDATE
-                RoleArn: 
-                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
-                StackName: !Sub '${AWS::StackName}-hosting-resources'
-                TemplatePath: SourceCode::infrastructure/resources/hosting-resources.yaml
-                Capabilities: CAPABILITY_NAMED_IAM
-                ParameterOverrides: !Sub '{"StackName": "${AWS::StackName}"}'
+                ProjectName: !Ref DeployHostingResourcesProject
+                EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 2
@@ -157,14 +245,13 @@ Resources:
             
             - Name: DeployToS3
               ActionTypeId:
-                Category: Deploy
+                Category: Build
                 Owner: AWS
-                Provider: S3
+                Provider: CodeBuild
                 Version: '1'
               Configuration:
-                BucketName: 
-                  Fn::ImportValue: !Sub '${AWS::StackName}-s3-resources-WebsiteBucketName'
-                Extract: true
+                ProjectName: !Ref DeployToS3Project
+                EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: BuildOutput
               RunOrder: 2
