@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 resources for the S3 Photo Gallery'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Name of the main stack
+
+Resources:
+  # S3 bucket for storing photos
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${StackName}-photos-${AWS::AccountId}'
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - '*'
+            MaxAge: 3600
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # S3 bucket policy for photos bucket
+  PhotoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PhotoBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${PhotoBucket}/*'
+
+  # S3 bucket for website hosting
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${StackName}-website-${AWS::AccountId}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # S3 bucket policy for website bucket
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${WebsiteBucket}/*'
+
+Outputs:
+  PhotoBucketName:
+    Description: Name of the S3 bucket for photos
+    Value: !Ref PhotoBucket
+    Export:
+      Name: !Sub '${StackName}-s3-resources-PhotoBucketName'
+
+  PhotoBucketArn:
+    Description: ARN of the S3 bucket for photos
+    Value: !GetAtt PhotoBucket.Arn
+    Export:
+      Name: !Sub '${StackName}-s3-resources-PhotoBucketArn'
+
+  WebsiteBucketName:
+    Description: Name of the S3 bucket for website hosting
+    Value: !Ref WebsiteBucket
+    Export:
+      Name: !Sub '${StackName}-s3-resources-WebsiteBucketName'
+
+  WebsiteBucketArn:
+    Description: ARN of the S3 bucket for website hosting
+    Value: !GetAtt WebsiteBucket.Arn
+    Export:
+      Name: !Sub '${StackName}-s3-resources-WebsiteBucketArn'
+
+  WebsiteURL:
+    Description: URL of the website
+    Value: !GetAtt WebsiteBucket.WebsiteURL
+    Export:
+      Name: !Sub '${StackName}-s3-resources-WebsiteURL'
