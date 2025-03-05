@@ -99,6 +99,15 @@ Resources:
                   - ssm:GetParameter
                   - ssm:DeleteParameter
                   - ssm:DescribeParameters
+                  - cloudfront:CreateDistribution
+                  - cloudfront:GetDistribution
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:TagResource
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                  - cloudfront:ListDistributions
 
 Outputs:
   ArtifactBucketName:
