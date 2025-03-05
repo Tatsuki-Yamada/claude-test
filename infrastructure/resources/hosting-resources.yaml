@@ -33,15 +33,12 @@ Resources:
           TargetOriginId: website-s3-origin
           ViewerProtocolPolicy: redirect-to-https
         Origins:
-          - DomainName: 
-              Fn::ImportValue: !Sub '${StackName}-s3-resources-WebsiteBucketName'
+          - DomainName: !Sub '${StackName}-website-${AWS::AccountId}.s3-website-${AWS::Region}.amazonaws.com'
             Id: website-s3-origin
             CustomOriginConfig:
               HTTPPort: 80
               HTTPSPort: 443
               OriginProtocolPolicy: http-only
-            OriginPath: ''
-            S3OriginConfig: {}
         PriceClass: PriceClass_100
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
