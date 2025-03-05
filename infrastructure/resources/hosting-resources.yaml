@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Hosting resources for the S3 Photo Gallery'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Name of the main stack
+
+Resources:
+  # CloudFront distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub 'CloudFront Distribution for ${StackName}'
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          DefaultTTL: 86400
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          TargetOriginId: website-s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+        Origins:
+          - DomainName: 
+              Fn::ImportValue: !Sub '${StackName}-s3-resources-WebsiteBucketName'
+            Id: website-s3-origin
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+            OriginPath: ''
+            S3OriginConfig: {}
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  # Environment variables for frontend
+  ReactEnvVars:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${StackName}/react-env-vars'
+      Type: String
+      Value: !Sub |
+        REACT_APP_S3_BUCKET_NAME=${StackName}-photos-${AWS::AccountId}
+        REACT_APP_AWS_REGION=${AWS::Region}
+      Description: Environment variables for the React application
+
+Outputs:
+  CloudFrontDistributionId:
+    Description: ID of the CloudFront distribution
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${StackName}-hosting-resources-CloudFrontDistributionId'
+
+  CloudFrontDomainName:
+    Description: Domain name of the CloudFront distribution
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${StackName}-hosting-resources-CloudFrontDomainName'
+
+  WebsiteURL:
+    Description: URL of the website
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Export:
+      Name: !Sub '${StackName}-hosting-resources-WebsiteURL'
+
+  ReactEnvVarsParam:
+    Description: SSM Parameter for React environment variables
+    Value: !Ref ReactEnvVars
+    Export:
+      Name: !Sub '${StackName}-hosting-resources-ReactEnvVarsParam'
