@@ -98,12 +98,9 @@ Resources:
             post_build:
               commands:
                 - echo S3 resources deployed
-                - echo Exporting bucket name...
-                - BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-s3-resources --query "Stacks[0].Outputs[?ExportName=='${STACK_NAME}-s3-resources-WebsiteBucketName'].OutputValue" --output text)
-                - echo "S3 bucket name: $BUCKET_NAME" >> bucket-info.txt
           artifacts:
             files:
-              - bucket-info.txt
+              - '**/*'
       TimeoutInMinutes: 10
       
   # ホスティングリソースをデプロイするためのCodeBuildプロジェクト
@@ -135,7 +132,7 @@ Resources:
                 - echo Hosting resources deployed
           artifacts:
             files:
-              - infrastructure/resources/hosting-resources.yaml
+              - '**/*'
       TimeoutInMinutes: 10
 
   # CodePipeline
@@ -180,8 +177,6 @@ Resources:
                 EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: SourceCode
-              OutputArtifacts:
-                - Name: S3ResourcesOutput
               RunOrder: 1
             
             # ホスティングリソースをデプロイ
