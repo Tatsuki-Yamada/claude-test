@@ -152,7 +152,7 @@ Resources:
         PrivilegedMode: false
       Source:
         Type: CODEPIPELINE
-        BuildSpecFile: infrastructure/buildspec/deploy-to-s3.yml
+        BuildSpec: infrastructure/buildspec/deploy-to-s3.yml
       TimeoutInMinutes: 10
 
   # CodePipeline
