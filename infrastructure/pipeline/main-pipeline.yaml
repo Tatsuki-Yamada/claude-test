@@ -50,7 +50,7 @@ Resources:
           phases:
             install:
               runtime-versions:
-                nodejs: 14
+                nodejs: 12
               commands:
                 - echo Installing dependencies...
                 - cd frontend
