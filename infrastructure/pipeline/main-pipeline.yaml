@@ -157,16 +157,16 @@ Resources:
           phases:
             build:
               commands:
-                - echo Deploying to S3 bucket...
-                - export WEBSITE_BUCKET=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-s3-resources --query "Stacks[0].Outputs[?ExportName=='${STACK_NAME}-s3-resources-WebsiteBucketName'].OutputValue" --output text)
+                - echo "Deploying to S3 bucket..."
+                - WEBSITE_BUCKET=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-s3-resources --query "Stacks[0].Outputs[?ExportName=='${STACK_NAME}-s3-resources-WebsiteBucketName'].OutputValue" --output text)
                 - echo "Website bucket: $WEBSITE_BUCKET"
-                - aws s3 sync . s3://$WEBSITE_BUCKET/ --delete
+                - aws s3 sync . "s3://$WEBSITE_BUCKET/" --delete
             post_build:
               commands:
-                - echo Website deployed to S3
+                - echo "Website deployed to S3"
           artifacts:
             files:
-              - '**/*'
+              - "**/*"
       TimeoutInMinutes: 10
 
   # CodePipeline
