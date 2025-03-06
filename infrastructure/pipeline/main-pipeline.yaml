@@ -43,6 +43,13 @@ Resources:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
         PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: REACT_APP_S3_BUCKET_NAME
+            Value: !Sub '${AWS::StackName}-photos-${AWS::AccountId}'
+            Type: PLAINTEXT
+          - Name: REACT_APP_AWS_REGION
+            Value: !Ref AWS::Region
+            Type: PLAINTEXT
       Source:
         Type: CODEPIPELINE
         BuildSpec: |
@@ -58,6 +65,9 @@ Resources:
             build:
               commands:
                 - echo Building the React application...
+                - echo "Building with environment variables:"
+                - echo "REACT_APP_S3_BUCKET_NAME=$REACT_APP_S3_BUCKET_NAME"
+                - echo "REACT_APP_AWS_REGION=$REACT_APP_AWS_REGION"
                 - npm run build
             post_build:
               commands:
@@ -226,3 +236,11 @@ Outputs:
   PipelineUrl:
     Description: URL to the CodePipeline console
     Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}
+  
+  PhotoBucketName:
+    Description: Name of the S3 bucket for photos
+    Value: !Sub '${AWS::StackName}-photos-${AWS::AccountId}'
+  
+  WebsiteBucketName:
+    Description: Name of the S3 bucket for website hosting
+    Value: !Sub '${AWS::StackName}-website-${AWS::AccountId}'
