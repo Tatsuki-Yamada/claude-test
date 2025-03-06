@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Meta Pipeline for S3 Photo Gallery - Updates Main Pipeline Automatically'
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: Tatsuki-Yamada
+    Description: GitHub repository owner
+  
+  GitHubRepo:
+    Type: String
+    Default: claude-test
+    Description: GitHub repository name
+  
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub repository branch
+  
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub OAuth token
+  
+  MainStackName:
+    Type: String
+    Default: s3-photo-gallery
+    Description: Name of the main pipeline stack
+  
+  PrerequisitesStackName:
+    Type: String
+    Default: s3-photo-gallery-prerequisites
+    Description: Name of the prerequisite resources CloudFormation stack
+
+Resources:
+  MetaPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${MainStackName}-meta-pipeline'
+      RoleArn: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodePipelineServiceRoleArn'
+      ArtifactStore:
+        Type: S3
+        Location: 
+          Fn::ImportValue: !Sub '${PrerequisitesStackName}-ArtifactBucketName'
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: SourceCode
+        
+        - Name: UpdatePipeline
+          Actions:
+            - Name: UpdateMainPipeline
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: 
+                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
+                StackName: !Ref MainStackName
+                TemplatePath: SourceCode::infrastructure/pipeline/main-pipeline.yaml
+                Capabilities: CAPABILITY_NAMED_IAM
+                ParameterOverrides: !Sub |
+                  {
+                    "GitHubOwner": "${GitHubOwner}",
+                    "GitHubRepo": "${GitHubRepo}",
+                    "GitHubBranch": "${GitHubBranch}",
+                    "GitHubToken": "${GitHubToken}",
+                    "PrerequisitesStackName": "${PrerequisitesStackName}"
+                  }
+              InputArtifacts:
+                - Name: SourceCode
+
+Outputs:
+  MetaPipelineUrl:
+    Description: URL to the Meta Pipeline console
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${MetaPipeline}
