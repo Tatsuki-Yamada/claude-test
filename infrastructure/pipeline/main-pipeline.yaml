@@ -152,7 +152,20 @@ Resources:
         PrivilegedMode: false
       Source:
         Type: CODEPIPELINE
-        BuildSpec: infrastructure/buildspec/deploy-to-s3.yml
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-s3-resources --query "Stacks[0].Outputs[?ExportName=='${STACK_NAME}-s3-resources-WebsiteBucketName'].OutputValue" --output text)
+                - echo "Found bucket: $BUCKET_NAME"
+                - aws s3 sync . s3://$BUCKET_NAME/ --delete
+            post_build:
+              commands:
+                - echo "Deployment completed"
+          artifacts:
+            files:
+              - '**/*'
       TimeoutInMinutes: 10
 
   # CodePipeline
