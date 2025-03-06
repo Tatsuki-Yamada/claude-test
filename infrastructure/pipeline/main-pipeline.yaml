@@ -135,7 +135,7 @@ Resources:
               - infrastructure/resources/hosting-resources.yaml
       TimeoutInMinutes: 10
 
-  # S3にデプロイするためのCodeBuildプロジェクト
+  # Add CodeBuild project for S3にデプロイするためのCodeBuildプロジェクト
   DeployToS3Project:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -152,21 +152,21 @@ Resources:
         PrivilegedMode: false
       Source:
         Type: CODEPIPELINE
-        BuildSpec: >-
+        BuildSpec: |
           version: 0.2
           phases:
             build:
               commands:
-                - "echo 'Finding S3 bucket name'"
-                - "BUCKET=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-s3-resources --query \"Stacks[0].Outputs[?ExportName=='${STACK_NAME}-s3-resources-WebsiteBucketName'].OutputValue\" --output text)"
-                - "echo \"Found bucket: $BUCKET\""
-                - "aws s3 sync . s3://$BUCKET/ --delete"
+                - echo "Deploying to S3..."
+                - cp ../infrastructure/scripts/deploy-to-s3.sh .
+                - chmod +x deploy-to-s3.sh
+                - ./deploy-to-s3.sh
             post_build:
               commands:
-                - "echo 'Deployment completed'"
+                - echo "Deployment completed"
           artifacts:
             files:
-              - "**/*"
+              - '**/*'
       TimeoutInMinutes: 10
 
   # CodePipeline
@@ -254,6 +254,7 @@ Resources:
                 EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
               InputArtifacts:
                 - Name: BuildOutput
+                - Name: SourceCode
               RunOrder: 2
 
 Outputs:
