@@ -15,8 +15,16 @@ export function PhotoGallery() {
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
+  // 環境変数を取得して、ログ出力とエラーハンドリングを強化
   const bucketName = process.env.REACT_APP_S3_BUCKET_NAME || '';
   const region = process.env.REACT_APP_AWS_REGION || 'us-east-1';
+  
+  // デバッグ用にコンソールにログ出力
+  useEffect(() => {
+    console.log('Environment variables:');
+    console.log('REACT_APP_S3_BUCKET_NAME:', process.env.REACT_APP_S3_BUCKET_NAME);
+    console.log('REACT_APP_AWS_REGION:', process.env.REACT_APP_AWS_REGION);
+  }, []);
   
   // Define the S3 client configuration
   const s3Client = new S3Client({
@@ -30,10 +38,12 @@ export function PhotoGallery() {
   }, []);
 
   const fetchPhotos = async () => {
-    if (!bucketName) {
+    // バケット名のエラーハンドリングを強化
+    if (!bucketName || bucketName.trim() === '') {
+      console.error('S3 bucket name is not configured. Environment variable REACT_APP_S3_BUCKET_NAME is missing or empty.');
       toast({
         title: 'Configuration Error',
-        description: 'S3 bucket name is not configured',
+        description: 'S3 bucket name is not configured. Please check application settings.',
         variant: 'destructive',
       });
       setLoading(false);
@@ -42,6 +52,7 @@ export function PhotoGallery() {
 
     try {
       setLoading(true);
+      console.log(`Fetching photos from bucket: ${bucketName} in region: ${region}`);
       
       const command = new ListObjectsV2Command({
         Bucket: bucketName,
@@ -62,13 +73,17 @@ export function PhotoGallery() {
             url: `https://${bucketName}.s3.${region}.amazonaws.com/${item.Key}`
           }));
         
+        console.log(`Found ${photoObjects.length} photos`);
         setPhotos(photoObjects);
+      } else {
+        console.log('No contents returned from S3');
+        setPhotos([]);
       }
     } catch (error) {
       console.error('Error fetching photos:', error);
       toast({
         title: 'Error',
-        description: 'Failed to fetch photos from S3',
+        description: `Failed to fetch photos from S3: ${error instanceof Error ? error.message : String(error)}`,
         variant: 'destructive',
       });
     } finally {
@@ -83,6 +98,12 @@ export function PhotoGallery() {
         <Button onClick={fetchPhotos} disabled={loading}>
           Refresh
         </Button>
+      </div>
+      
+      {/* デバッグ情報を表示 */}
+      <div className="text-sm text-muted-foreground mb-4">
+        <p>Bucket: {bucketName || 'Not configured'}</p>
+        <p>Region: {region}</p>
       </div>
       
       {loading ? (
