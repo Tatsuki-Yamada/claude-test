@@ -19,6 +19,9 @@ Resources:
             AllowedMethods:
               - GET
               - HEAD
+              - PUT
+              - POST
+              - DELETE
             AllowedOrigins:
               - '*'
             MaxAge: 3600
@@ -39,8 +42,12 @@ Resources:
           - Sid: PublicReadForGetBucketObjects
             Effect: Allow
             Principal: '*'
-            Action: 's3:GetObject'
-            Resource: !Sub 'arn:aws:s3:::${PhotoBucket}/*'
+            Action: 
+              - 's3:GetObject'
+              - 's3:ListBucket'
+            Resource: 
+              - !Sub 'arn:aws:s3:::${PhotoBucket}'
+              - !Sub 'arn:aws:s3:::${PhotoBucket}/*'
 
   # S3 bucket for website hosting
   WebsiteBucket:
