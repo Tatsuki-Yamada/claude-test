@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'S3 Photo Gallery CI/CD Pipeline'
+Description: 'S3 Photo Gallery CI/CD Pipeline - Optimized Architecture'
 
 Parameters:
   GitHubOwner:
@@ -28,12 +28,12 @@ Parameters:
     Description: Name of the prerequisite resources CloudFormation stack
 
 Resources:
-  # CodeBuild project for building and deploying the React app
+  # CodeBuild project for building React app only - no infrastructure deployment
   BuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: !Sub '${AWS::StackName}-build'
-      Description: 'Build and deploy the S3 Photo Gallery React app'
+      Description: 'Build the S3 Photo Gallery React app'
       ServiceRole: 
         Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
       Artifacts:
@@ -42,7 +42,7 @@ Resources:
         Type: LINUX_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
-        PrivilegedMode: true
+        PrivilegedMode: false
         EnvironmentVariables:
           - Name: REACT_APP_S3_BUCKET_NAME
             Value: !Sub '${AWS::StackName}-photos-${AWS::AccountId}'
@@ -52,98 +52,11 @@ Resources:
             Type: PLAINTEXT
       Source:
         Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                nodejs: 16
-              commands:
-                - echo Installing dependencies...
-                - cd frontend
-                - npm install
-            build:
-              commands:
-                - echo Building the React application...
-                - echo "Building with environment variables:"
-                - echo "REACT_APP_S3_BUCKET_NAME=$REACT_APP_S3_BUCKET_NAME"
-                - echo "REACT_APP_AWS_REGION=$REACT_APP_AWS_REGION"
-                - npm run build
-            post_build:
-              commands:
-                - echo Build completed on `date`
-          artifacts:
-            base-directory: frontend/build
-            files:
-              - '**/*'
-          cache:
-            paths:
-              - 'frontend/node_modules/**/*'
+        BuildSpec: infrastructure/buildspecs/build-react-app.yml
       TimeoutInMinutes: 10
 
-  # S3バケットをデプロイするためのCodeBuildプロジェクト
-  DeployS3ResourcesProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub '${AWS::StackName}-deploy-s3-resources'
-      Description: 'Deploy S3 resources with CloudFormation'
-      ServiceRole: 
-        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
-      Artifacts:
-        Type: CODEPIPELINE
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
-        PrivilegedMode: false
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - echo Deploying S3 resources...
-                - aws cloudformation deploy --template-file infrastructure/resources/s3-resources.yaml --stack-name ${STACK_NAME}-s3-resources --parameter-overrides StackName=${STACK_NAME} --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset
-            post_build:
-              commands:
-                - echo S3 resources deployed
-          artifacts:
-            files:
-              - '**/*'
-      TimeoutInMinutes: 10
-      
-  # ホスティングリソースをデプロイするためのCodeBuildプロジェクト
-  DeployHostingResourcesProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub '${AWS::StackName}-deploy-hosting-resources'
-      Description: 'Deploy hosting resources with CloudFormation'
-      ServiceRole: 
-        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
-      Artifacts:
-        Type: CODEPIPELINE
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
-        PrivilegedMode: false
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - echo Deploying hosting resources...
-                - aws cloudformation deploy --template-file infrastructure/resources/hosting-resources.yaml --stack-name ${STACK_NAME}-hosting-resources --parameter-overrides StackName=${STACK_NAME} --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset
-            post_build:
-              commands:
-                - echo Hosting resources deployed
-          artifacts:
-            files:
-              - '**/*'
-      TimeoutInMinutes: 10
+  # CloudFormation service role - will be used for direct CloudFormation actions in pipeline
+  # Role is imported from prerequisites stack
 
   # CodePipeline
   Pipeline:
@@ -173,39 +86,55 @@ Resources:
               OutputArtifacts:
                 - Name: SourceCode
         
-        - Name: DeployResources
+        - Name: DeployInfrastructure
           Actions:
-            # S3リソースをデプロイ
+            # S3リソースをデプロイ (CloudFormation直接呼び出し)
             - Name: DeployS3Resources
               ActionTypeId:
-                Category: Build
+                Category: Deploy
                 Owner: AWS
-                Provider: CodeBuild
+                Provider: CloudFormation
                 Version: '1'
               Configuration:
-                ProjectName: !Ref DeployS3ResourcesProject
-                EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
+                ActionMode: CREATE_UPDATE
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: 
+                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
+                StackName: !Sub '${AWS::StackName}-s3-resources'
+                TemplatePath: SourceCode::infrastructure/resources/s3-resources.yaml
+                ParameterOverrides: !Sub |
+                  {
+                    "StackName": "${AWS::StackName}"
+                  }
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 1
             
-            # ホスティングリソースをデプロイ
+            # ホスティングリソースをデプロイ (CloudFormation直接呼び出し)
             - Name: DeployHostingResources
               ActionTypeId:
-                Category: Build
+                Category: Deploy
                 Owner: AWS
-                Provider: CodeBuild
+                Provider: CloudFormation
                 Version: '1'
               Configuration:
-                ProjectName: !Ref DeployHostingResourcesProject
-                EnvironmentVariables: !Sub '[{"name":"STACK_NAME","value":"${AWS::StackName}","type":"PLAINTEXT"}]'
+                ActionMode: CREATE_UPDATE
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: 
+                  Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudFormationServiceRoleArn'
+                StackName: !Sub '${AWS::StackName}-hosting-resources'
+                TemplatePath: SourceCode::infrastructure/resources/hosting-resources.yaml
+                ParameterOverrides: !Sub |
+                  {
+                    "StackName": "${AWS::StackName}"
+                  }
               InputArtifacts:
                 - Name: SourceCode
               RunOrder: 2
         
         - Name: BuildAndDeploy
           Actions:
-            - Name: BuildAndDeployApp
+            - Name: BuildReactApp
               ActionTypeId:
                 Category: Build
                 Owner: AWS
