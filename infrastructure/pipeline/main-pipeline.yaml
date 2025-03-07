@@ -58,7 +58,7 @@ Resources:
   # CloudFormation service role - will be used for direct CloudFormation actions in pipeline
   # Role is imported from prerequisites stack
 
-  # CodePipeline
+  # CodePipeline - 自動トリガーを無効化
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -83,6 +83,7 @@ Resources:
                 Repo: !Ref GitHubRepo
                 Branch: !Ref GitHubBranch
                 OAuthToken: !Ref GitHubToken
+                PollForSourceChanges: false  # 自動変更検知を無効化
               OutputArtifacts:
                 - Name: SourceCode
         
@@ -186,3 +187,7 @@ Outputs:
   WebsiteBucketName:
     Description: Name of the S3 bucket for website hosting
     Value: !Sub '${AWS::StackName}-website-${AWS::AccountId}'
+  
+  ManualTriggerInstructions:
+    Description: Instructions for manually triggering the pipeline
+    Value: "This pipeline is configured for manual triggering only. To run it, use the AWS Console or CLI: aws codepipeline start-pipeline-execution --name s3-photo-gallery-pipeline"
