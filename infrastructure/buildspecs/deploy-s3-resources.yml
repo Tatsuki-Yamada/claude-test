@@ -1,0 +1,12 @@
+version: 0.2
+phases:
+  build:
+    commands:
+      - echo Deploying S3 resources...
+      - aws cloudformation deploy --template-file infrastructure/resources/s3-resources.yaml --stack-name ${STACK_NAME}-s3-resources --parameter-overrides StackName=${STACK_NAME} --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset
+  post_build:
+    commands:
+      - echo S3 resources deployed
+artifacts:
+  files:
+    - '**/*'
