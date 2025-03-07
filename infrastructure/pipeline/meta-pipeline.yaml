@@ -33,6 +33,34 @@ Parameters:
     Description: Name of the prerequisite resources CloudFormation stack
 
 Resources:
+  # CloudWatch event to detect changes in the infrastructure/pipeline directory
+  PipelineChangeDetector:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${MainStackName}-pipeline-change-detector'
+      Description: 'Detect changes in the pipeline directory and trigger the meta-pipeline'
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - 'CodeCommit Repository State Change'
+        resources:
+          - !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${GitHubRepo}'
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref GitHubBranch
+      State: ENABLED
+      Targets:
+        - Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${MetaPipeline}'
+          Id: TriggerMetaPipeline
+          RoleArn: 
+            Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudWatchEventsServiceRoleArn'
+
   MetaPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
