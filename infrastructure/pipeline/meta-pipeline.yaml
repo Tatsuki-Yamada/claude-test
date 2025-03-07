@@ -33,6 +33,44 @@ Parameters:
     Description: Name of the prerequisite resources CloudFormation stack
 
 Resources:
+  # メインパイプラインを実行するためのCodeBuildプロジェクト
+  TriggerMainPipelineProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${MainStackName}-trigger-main-pipeline'
+      Description: 'Trigger the main pipeline after meta-pipeline updates it'
+      ServiceRole: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: MAIN_PIPELINE_NAME
+            Value: !Sub '${MainStackName}-pipeline'
+            Type: PLAINTEXT
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo "Waiting for main pipeline to be ready..."
+                - sleep 10
+                - echo "Triggering main pipeline: $MAIN_PIPELINE_NAME"
+                - aws codepipeline start-pipeline-execution --name $MAIN_PIPELINE_NAME
+            post_build:
+              commands:
+                - echo "Main pipeline triggered successfully"
+          artifacts:
+            files:
+              - '**/*'
+      TimeoutInMinutes: 5
+
   # CloudWatch event to detect changes in the infrastructure/pipeline directory
   PipelineChangeDetector:
     Type: AWS::Events::Rule
@@ -113,8 +151,26 @@ Resources:
                   }
               InputArtifacts:
                 - Name: SourceCode
+        
+        # メインパイプラインを実行するステージを追加
+        - Name: TriggerMainPipeline
+          Actions:
+            - Name: TriggerMainPipeline
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref TriggerMainPipelineProject
+              InputArtifacts:
+                - Name: SourceCode
 
 Outputs:
   MetaPipelineUrl:
     Description: URL to the Meta Pipeline console
     Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${MetaPipeline}
+  
+  AutomationDetails:
+    Description: Automation workflow details
+    Value: !Sub "When code changes are detected in the pipeline directory, this meta-pipeline will update the main pipeline and then automatically trigger it to run."
