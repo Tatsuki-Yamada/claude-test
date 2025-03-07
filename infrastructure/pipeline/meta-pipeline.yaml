@@ -33,43 +33,77 @@ Parameters:
     Description: Name of the prerequisite resources CloudFormation stack
 
 Resources:
-  # メインパイプラインを実行するためのCodeBuildプロジェクト
-  TriggerMainPipelineProject:
-    Type: AWS::CodeBuild::Project
+  # CloudWatch Events用のLambda関数
+  TriggerMainPipelineLambda:
+    Type: AWS::Lambda::Function
     Properties:
-      Name: !Sub '${MainStackName}-trigger-main-pipeline'
-      Description: 'Trigger the main pipeline after meta-pipeline updates it'
-      ServiceRole: 
-        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
-      Artifacts:
-        Type: CODEPIPELINE
+      FunctionName: !Sub '${MainStackName}-trigger-main-pipeline'
+      Handler: index.handler
+      Role: !GetAtt TriggerMainPipelineLambdaRole.Arn
+      Runtime: nodejs16.x
+      Timeout: 30
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          
+          exports.handler = async (event) => {
+            console.log('Event:', JSON.stringify(event, null, 2));
+            
+            // メインパイプライン名を取得
+            const mainPipelineName = process.env.MAIN_PIPELINE_NAME;
+            console.log(`Main pipeline name: ${mainPipelineName}`);
+            
+            // CodePipelineクライアントを初期化
+            const codepipeline = new AWS.CodePipeline();
+            
+            try {
+              // メインパイプラインを実行
+              const params = {
+                name: mainPipelineName
+              };
+              
+              console.log(`Starting pipeline execution for: ${mainPipelineName}`);
+              const result = await codepipeline.startPipelineExecution(params).promise();
+              console.log('Pipeline started successfully:', result);
+              
+              return {
+                statusCode: 200,
+                body: JSON.stringify('Main pipeline triggered successfully')
+              };
+            } catch (error) {
+              console.error('Error triggering pipeline:', error);
+              // エラーが発生しても成功として処理（失敗しても継続）
+              return {
+                statusCode: 200,
+                body: JSON.stringify(`Note: Could not trigger pipeline: ${error.message}`)
+              };
+            }
+          }
       Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
-        PrivilegedMode: false
-        EnvironmentVariables:
-          - Name: MAIN_PIPELINE_NAME
-            Value: !Sub '${MainStackName}-pipeline'
-            Type: PLAINTEXT
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - echo "Waiting for main pipeline to be ready..."
-                - sleep 10
-                - echo "Triggering main pipeline: $MAIN_PIPELINE_NAME"
-                - aws codepipeline start-pipeline-execution --name $MAIN_PIPELINE_NAME
-            post_build:
-              commands:
-                - echo "Main pipeline triggered successfully"
-          artifacts:
-            files:
-              - '**/*'
-      TimeoutInMinutes: 5
+        Variables:
+          MAIN_PIPELINE_NAME: !Sub '${MainStackName}-pipeline'
+
+  # Lambda関数用のIAMロール
+  TriggerMainPipelineLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CodePipelineStartExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${MainStackName}-pipeline'
 
   # CloudWatch event to detect changes in the infrastructure/pipeline directory
   PipelineChangeDetector:
@@ -98,6 +132,38 @@ Resources:
           Id: TriggerMetaPipeline
           RoleArn: 
             Fn::ImportValue: !Sub '${PrerequisitesStackName}-CloudWatchEventsServiceRoleArn'
+
+  # CloudFormationイベントフックルール
+  CloudFormationHook:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${MainStackName}-cloudformation-hook'
+      Description: 'Detect when the main pipeline stack is updated and trigger the main pipeline'
+      EventPattern:
+        source:
+          - aws.cloudformation
+        detail-type:
+          - 'CloudFormation Stack Status Change'
+        detail:
+          stack-id:
+            - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${MainStackName}/*'
+          status-details:
+            status:
+              - UPDATE_COMPLETE
+              - CREATE_COMPLETE
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt TriggerMainPipelineLambda.Arn
+          Id: TriggerMainPipelineLambda
+
+  # Lambda関数へのCloudWatch Eventsの許可
+  CloudFormationHookLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TriggerMainPipelineLambda
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CloudFormationHook.Arn
 
   MetaPipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -151,20 +217,6 @@ Resources:
                   }
               InputArtifacts:
                 - Name: SourceCode
-        
-        # メインパイプラインを実行するステージを追加
-        - Name: TriggerMainPipeline
-          Actions:
-            - Name: TriggerMainPipeline
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: '1'
-              Configuration:
-                ProjectName: !Ref TriggerMainPipelineProject
-              InputArtifacts:
-                - Name: SourceCode
 
 Outputs:
   MetaPipelineUrl:
@@ -173,4 +225,4 @@ Outputs:
   
   AutomationDetails:
     Description: Automation workflow details
-    Value: !Sub "When code changes are detected in the pipeline directory, this meta-pipeline will update the main pipeline and then automatically trigger it to run."
+    Value: !Sub "When the ${MainStackName} stack is updated, a CloudWatch Event automatically triggers the main pipeline."
