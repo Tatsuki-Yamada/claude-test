@@ -142,6 +142,19 @@ Resources:
                 Version: '1'
               Configuration:
                 ProjectName: !Ref BuildProject
+                EnvironmentVariables: !Sub |
+                  [
+                    {
+                      "name": "REACT_APP_S3_BUCKET_NAME",
+                      "value": "${AWS::StackName}-photos-${AWS::AccountId}",
+                      "type": "PLAINTEXT"
+                    },
+                    {
+                      "name": "REACT_APP_AWS_REGION",
+                      "value": "${AWS::Region}",
+                      "type": "PLAINTEXT"
+                    }
+                  ]
               InputArtifacts:
                 - Name: SourceCode
               OutputArtifacts:
@@ -160,6 +173,55 @@ Resources:
               InputArtifacts:
                 - Name: BuildOutput
               RunOrder: 2
+            
+            # CloudFrontのキャッシュを無効化
+            - Name: InvalidateCloudFrontCache
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref InvalidateCacheProject
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 3
+
+  # CloudFrontキャッシュ無効化用のプロジェクト
+  InvalidateCacheProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-invalidate-cache'
+      Description: 'Invalidate CloudFront cache after deployment'
+      ServiceRole: 
+        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: STACK_NAME
+            Value: !Ref AWS::StackName
+            Type: PLAINTEXT
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo "Retrieving CloudFront distribution ID..."
+                - export CLOUDFRONT_DIST_ID=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME}-hosting-resources --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text)
+                - echo "Retrieved CloudFront distribution ID: $CLOUDFRONT_DIST_ID"
+                - echo "Creating CloudFront invalidation..."
+                - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*"
+            post_build:
+              commands:
+                - echo "CloudFront cache invalidation complete"
+      TimeoutInMinutes: 10
 
 Outputs:
   PipelineUrl:
