@@ -33,38 +33,79 @@ Parameters:
     Description: Name of the prerequisite resources CloudFormation stack
 
 Resources:
-  # メインパイプラインを実行するためのCodeBuildプロジェクト - シンプルなアプローチ
-  TriggerMainPipelineProject:
-    Type: AWS::CodeBuild::Project
+  # Lambda関数を使用してメインパイプラインを呼び出し
+  TriggerMainPipelineLambda:
+    Type: AWS::Lambda::Function
     Properties:
-      Name: !Sub '${MainStackName}-trigger-main-pipeline'
-      Description: 'Trigger the main pipeline after meta-pipeline updates it'
-      ServiceRole: 
-        Fn::ImportValue: !Sub '${PrerequisitesStackName}-CodeBuildServiceRoleArn'
-      Artifacts:
-        Type: CODEPIPELINE
+      FunctionName: !Sub '${MainStackName}-trigger-lambda'
+      Handler: index.handler
+      Role: !GetAtt TriggerMainPipelineLambdaRole.Arn
+      Runtime: nodejs16.x
+      Timeout: 30
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const codepipeline = new AWS.CodePipeline();
+          const response = require('cfn-response');
+          
+          exports.handler = async (event, context) => {
+            console.log('Event:', JSON.stringify(event, null, 2));
+            
+            // CloudFormationカスタムリソースの場合のみ処理
+            if (event.RequestType === 'Create' || event.RequestType === 'Update') {
+              try {
+                const pipelineName = process.env.MAIN_PIPELINE_NAME;
+                console.log(`Starting pipeline: ${pipelineName}`);
+                
+                const result = await codepipeline.startPipelineExecution({
+                  name: pipelineName
+                }).promise();
+                
+                console.log('Pipeline started:', result);
+                await response.send(event, context, response.SUCCESS, {}, 'PipelineTrigger');
+              } catch (error) {
+                console.error('Error:', error);
+                // エラーでも成功として応答（失敗しても続行するため）
+                await response.send(event, context, response.SUCCESS, {}, 'PipelineTrigger');
+              }
+            } else if (event.RequestType === 'Delete') {
+              // Delete時は何もしない
+              await response.send(event, context, response.SUCCESS, {}, 'PipelineTrigger');
+            }
+          };
       Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
-        PrivilegedMode: false
-        EnvironmentVariables:
-          - Name: MAIN_PIPELINE_NAME
-            Value: !Sub '${MainStackName}-pipeline'
-            Type: PLAINTEXT
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            build:
-              commands:
-                - echo "Triggering main pipeline: $MAIN_PIPELINE_NAME"
-                - aws codepipeline start-pipeline-execution --name $MAIN_PIPELINE_NAME || echo "Failed to trigger pipeline, but continuing anyway"
-          artifacts:
-            files:
-              - README.md
-      TimeoutInMinutes: 5
+        Variables:
+          MAIN_PIPELINE_NAME: !Sub '${MainStackName}-pipeline'
+
+  # Lambda用のIAMロール
+  TriggerMainPipelineLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CodePipelineStartExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${MainStackName}-pipeline'
+
+  # メインパイプラインを実行するためのカスタムリソース
+  TriggerMainPipelineCustomResource:
+    Type: Custom::TriggerMainPipeline
+    Properties:
+      ServiceToken: !GetAtt TriggerMainPipelineLambda.Arn
+      # この値を変更すると、パイプライン更新後に必ずトリガーされる
+      UpdateTimestamp: !Ref AWS::StackName
 
   # CloudWatch event to detect changes in the infrastructure/pipeline directory
   PipelineChangeDetector:
@@ -146,20 +187,6 @@ Resources:
                   }
               InputArtifacts:
                 - Name: SourceCode
-        
-        # メインパイプラインを直接実行するステージ
-        - Name: TriggerMainPipeline
-          Actions:
-            - Name: TriggerMainPipeline
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: '1'
-              Configuration:
-                ProjectName: !Ref TriggerMainPipelineProject
-              InputArtifacts:
-                - Name: SourceCode
 
 Outputs:
   MetaPipelineUrl:
@@ -168,4 +195,4 @@ Outputs:
   
   AutomationDetails:
     Description: Automation workflow details
-    Value: "When the meta-pipeline completes, it will automatically trigger the main pipeline."
+    Value: "When the meta-pipeline completes, a Lambda function will automatically trigger the main pipeline."
