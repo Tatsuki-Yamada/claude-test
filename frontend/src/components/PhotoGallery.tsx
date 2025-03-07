@@ -26,11 +26,17 @@ export function PhotoGallery() {
     console.log('REACT_APP_AWS_REGION:', process.env.REACT_APP_AWS_REGION);
   }, []);
   
-  // Define the S3 client configuration
+  // S3クライアントの設定を改善
   const s3Client = new S3Client({
     region,
-    // Credentials are handled by the AWS SDK automatically when deployed
-    // For local development, configure your AWS credentials in your environment
+    // 認証情報なしでパブリックなS3バケットにアクセス
+    credentials: {
+      accessKeyId: 'ANONYMOUS',
+      secretAccessKey: 'ANONYMOUS'
+    },
+    // サービスに直接アクセス（署名プロセスをスキップ）
+    signingRegion: region,
+    forcePathStyle: true
   });
 
   useEffect(() => {
@@ -136,6 +142,10 @@ export function PhotoGallery() {
       ) : (
         <div className="text-center py-12">
           <p className="text-muted-foreground">No photos found in the S3 bucket.</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Try uploading some images to the bucket: 
+            <code className="ml-1 p-1 bg-muted rounded">{bucketName}</code>
+          </p>
         </div>
       )}
     </div>
