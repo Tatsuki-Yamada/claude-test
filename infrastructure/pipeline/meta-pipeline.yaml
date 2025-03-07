@@ -61,12 +61,9 @@ Resources:
               commands:
                 - echo "Triggering main pipeline: $MAIN_PIPELINE_NAME"
                 - aws codepipeline start-pipeline-execution --name $MAIN_PIPELINE_NAME || echo "Failed to trigger pipeline, but continuing anyway"
-            post_build:
-              commands:
-                - echo "Pipeline trigger step completed"
           artifacts:
             files:
-              - .gitkeep
+              - README.md
       TimeoutInMinutes: 5
 
   # CloudWatch event to detect changes in the infrastructure/pipeline directory
