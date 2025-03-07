@@ -10,6 +10,15 @@ phases:
   build:
     commands:
       - echo Building the React application...
+      - echo "Building with environment variables:"
+      - echo "REACT_APP_S3_BUCKET_NAME=$REACT_APP_S3_BUCKET_NAME"
+      - echo "REACT_APP_AWS_REGION=$REACT_APP_AWS_REGION"
+      - |
+        # Create .env file with environment variables to ensure they're included in the build
+        cat > .env << EOL
+        REACT_APP_S3_BUCKET_NAME=${REACT_APP_S3_BUCKET_NAME}
+        REACT_APP_AWS_REGION=${REACT_APP_AWS_REGION}
+        EOL
       - npm run build
   post_build:
     commands:
