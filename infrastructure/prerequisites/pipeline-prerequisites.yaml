@@ -33,8 +33,33 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
         - arn:aws:iam::aws:policy/CloudWatchFullAccess
-        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
         - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
+      Policies:
+        - PolicyName: CodePipelinePassRolePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: '*'
+        - PolicyName: CodePipelineCloudFormationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:CreateStack'
+                  - 'cloudformation:DeleteStack'
+                  - 'cloudformation:DescribeStacks'
+                  - 'cloudformation:UpdateStack'
+                  - 'cloudformation:CreateChangeSet'
+                  - 'cloudformation:DeleteChangeSet'
+                  - 'cloudformation:DescribeChangeSet'
+                  - 'cloudformation:ExecuteChangeSet'
+                  - 'cloudformation:SetStackPolicy'
+                  - 'cloudformation:ValidateTemplate'
+                Resource: '*'
 
   # IAM role for CloudFormation
   CloudFormationServiceRole:
