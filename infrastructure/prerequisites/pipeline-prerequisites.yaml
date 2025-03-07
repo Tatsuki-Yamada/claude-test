@@ -108,6 +108,27 @@ Resources:
                   - cloudfront:GetInvalidation
                   - cloudfront:ListInvalidations
                   - cloudfront:ListDistributions
+  
+  # IAM role for CloudWatch Events to trigger pipeline
+  CloudWatchEventsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchEventsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource: '*'
 
 Outputs:
   ArtifactBucketName:
@@ -133,3 +154,9 @@ Outputs:
     Value: !GetAtt CodeBuildServiceRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-CodeBuildServiceRoleArn'
+      
+  CloudWatchEventsServiceRoleArn:
+    Description: ARN of the IAM role for CloudWatch Events
+    Value: !GetAtt CloudWatchEventsServiceRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudWatchEventsServiceRoleArn'
