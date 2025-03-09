@@ -25,7 +25,7 @@ export function PhotoGallery() {
     console.log('REACT_APP_AWS_REGION:', process.env.REACT_APP_AWS_REGION);
   }, []);
 
-  // S3バケットからサンプル画像のリストを取得する（AWS SDKなしで）
+  // 画像を直接フェッチする関数（SDKを使わない）
   const fetchPhotos = async () => {
     if (!bucketName || bucketName.trim() === '') {
       console.error('S3 bucket name is not configured. Environment variable REACT_APP_S3_BUCKET_NAME is missing or empty.');
@@ -40,50 +40,73 @@ export function PhotoGallery() {
 
     try {
       setLoading(true);
-      console.log(`Using bucket: ${bucketName} in region: ${region}`);
+      console.log(`Fetching photos from bucket: ${bucketName} in region: ${region}`);
       
-      // S3バケット内の一般的な画像ファイル名のサンプル
-      // 実際のバケットに合わせて調整してください
-      const sampleFiles = [
-        'image1.jpg',
-        'image2.jpg',
-        'sample.png',
-        'photo.jpeg',
-        'thumbnail.png',
-        'test.jpg',
-        'demo.png',
-        'landscape.jpg',
-        'portrait.jpg',
-        'cat.jpg',
-        'dog.png',
-        'nature.jpg',
-        'city.jpeg',
-        'sample1.jpg',
-        'sample2.png',
-        'example.jpg',
-        'picture.jpeg',
-        // 実際にバケットにアップロードしたファイル名を追加してください
-      ];
+      // S3 SDKを使わず、XMLリストを直接取得する方法
+      const url = `https://${bucketName}.s3.${region}.amazonaws.com/`;
+      console.log('Fetching from URL:', url);
       
-      // S3バケットURLを使用して画像URLを生成
-      const photoObjects = sampleFiles.map(filename => ({
-        key: filename,
-        url: `https://${bucketName}.s3.${region}.amazonaws.com/${filename}`
-      }));
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/xml'
+        }
+      });
       
-      console.log('Generated photo URLs:', photoObjects);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const xmlText = await response.text();
+      console.log('Received XML response:', xmlText.substring(0, 200) + '...');
+      
+      // XML解析
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const contents = xmlDoc.getElementsByTagName('Contents');
+      
+      console.log(`Found ${contents.length} objects in the bucket`);
+      
+      // 画像のみをフィルタリング
+      const photoObjects: Photo[] = [];
+      
+      for (let i = 0; i < contents.length; i++) {
+        const key = contents[i].getElementsByTagName('Key')[0].textContent;
+        if (key && 
+          (key.toLowerCase().endsWith('.jpg') || 
+          key.toLowerCase().endsWith('.jpeg') || 
+          key.toLowerCase().endsWith('.png') || 
+          key.toLowerCase().endsWith('.gif'))) {
+          
+          photoObjects.push({
+            key: key,
+            url: `https://${bucketName}.s3.${region}.amazonaws.com/${key}`
+          });
+        }
+      }
+      
+      console.log(`Found ${photoObjects.length} photos after filtering`);
+      console.log('Photo URLs:', photoObjects);
       setPhotos(photoObjects);
       
-      // 注：このアプローチでは、実際にS3にアクセスせずにURLだけを生成
-      // 存在しない画像ファイルはブラウザで読み込みエラーになるが、onErrorハンドラで非表示にできる
     } catch (error) {
-      console.error('Error processing photos:', error);
+      console.error('Error fetching photos:', error);
+      
+      // エラーに対処してサンプル画像を表示（確認用）
+      const demoPhotos = [
+        {key: 'sample1.jpg', url: `https://${bucketName}.s3.${region}.amazonaws.com/sample1.jpg`},
+        {key: 'sample2.jpg', url: `https://${bucketName}.s3.${region}.amazonaws.com/sample2.jpg`},
+        {key: 'sample3.jpg', url: `https://${bucketName}.s3.${region}.amazonaws.com/sample3.jpg`}
+      ];
+      
+      console.log('Using demo photo URLs instead:', demoPhotos);
+      setPhotos(demoPhotos);
+      
       toast({
         title: 'Error',
-        description: `Failed to process photos: ${error instanceof Error ? error.message : String(error)}`,
+        description: `Failed to fetch photos from S3: ${error instanceof Error ? error.message : String(error)}`,
         variant: 'destructive',
       });
-      setPhotos([]);
     } finally {
       setLoading(false);
     }
@@ -94,18 +117,25 @@ export function PhotoGallery() {
     fetchPhotos();
   }, [bucketName, region]);
 
-  // 画像をアップロードするボタンのハンドラ
+  // 画像をS3にアップロードする機能用のプレースホルダー
   const handleUpload = () => {
-    toast({
-      title: 'アップロード情報',
-      description: 'S3へのアップロードは、AWSコンソールから直接行ってください。',
-    });
-  };
-
-  // ファイル名のみを表示する関数（パスを含む場合はパスを除去）
-  const getFileName = (path: string) => {
-    const parts = path.split('/');
-    return parts[parts.length - 1];
+    // ファイル選択ダイアログを開くためのhidden input
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.multiple = true;
+    
+    fileInput.onchange = async (e) => {
+      const input = e.target as HTMLInputElement;
+      if (!input.files || input.files.length === 0) return;
+      
+      toast({
+        title: 'アップロード情報',
+        description: 'S3へのアップロードは別の方法で行ってください。AWSコンソールからS3バケットにアップロードするか、AWS CLIを使用してください。',
+      });
+    };
+    
+    fileInput.click();
   };
 
   return (
@@ -130,9 +160,8 @@ export function PhotoGallery() {
         <p className="mt-2 font-medium">使用方法:</p>
         <p>1. AWSコンソールで上記のS3バケットに画像ファイルをアップロードします</p>
         <p>2. アップロードしたファイルを公開アクセス可能に設定します</p>
-        <p>3. コードの「sampleFiles」配列に、アップロードしたファイル名を追加します</p>
-        <p>4. 「Refresh」ボタンをクリックして画像リストを更新します</p>
-        <p className="mt-2 text-xs">注: バケット内の実際のファイルに合わせて、コードを修正する必要があります</p>
+        <p>3. 「Refresh」ボタンをクリックして画像リストを更新します</p>
+        <p className="mt-2 text-xs">デバッグ: 画像が表示されない場合、ブラウザのコンソールでエラーを確認してください</p>
       </div>
       
       {loading ? (
@@ -151,23 +180,20 @@ export function PhotoGallery() {
           {photos.map((photo) => (
             <Card key={photo.key} className="overflow-hidden">
               <CardContent className="p-4">
-                <div className="relative">
-                  <img 
-                    src={photo.url} 
-                    alt={getFileName(photo.key)}
-                    className="h-48 w-full object-cover rounded-md"
-                    loading="lazy"
-                    onError={(e) => {
-                      // 画像が見つからない場合は要素を非表示に
-                      const target = e.target as HTMLImageElement;
-                      const parent = target.parentElement;
-                      if (parent && parent.parentElement) {
-                        parent.parentElement.style.display = 'none';
-                      }
-                    }}
-                  />
-                </div>
-                <p className="mt-2 text-sm truncate">{getFileName(photo.key)}</p>
+                <img 
+                  src={photo.url} 
+                  alt={photo.key}
+                  className="h-48 w-full object-cover rounded-md"
+                  loading="lazy"
+                  onError={(e) => {
+                    // 画像が存在しない場合のエラーハンドリング
+                    const target = e.target as HTMLImageElement;
+                    target.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`;
+                    target.classList.add('bg-gray-100', 'p-4');
+                    target.alt = 'Image not available';
+                  }}
+                />
+                <p className="mt-2 text-sm truncate">{photo.key}</p>
               </CardContent>
             </Card>
           ))}
